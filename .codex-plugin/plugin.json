@@ -1,22 +1,22 @@
 {
-  "name": "flywheel-analytics",
-  "version": "0.2.10",
-  "description": "Flywheel 大盘分析：12 个受治理只读 MCP 工具，月度估算口径与复现戳；Skill 提供完整规则和能力路由，语义工具按需说明。",
+  "name": "strategic-analytics",
+  "version": "0.3.0",
+  "description": "战略大盘分析：14 个受治理只读 MCP 工具，月度估算口径与复现戳；Skill 提供完整规则和能力路由，语义工具按需说明。",
   "author": {
     "name": "chenyu"
   },
   "skills": "./skills/",
   "mcpServers": {
-    "flywheel": {
+    "strategic": {
       "type": "http",
       "url": "https://voc.ulanzi.com:28081/flywheel/mcp",
-      "bearer_token_env_var": "FLYWHEEL_MCP_TOKEN"
+      "bearer_token_env_var": "STRATEGIC_MCP_TOKEN"
     }
   },
   "interface": {
-    "displayName": "Flywheel 大盘分析",
+    "displayName": "战略大盘分析",
     "shortDescription": "受治理的市场趋势、份额、品牌与 SKU 分析",
-    "longDescription": "通过 Flywheel 只读 MCP 查询月度市场估算数据，分析趋势、份额、增长贡献、价格带、品牌格局与单 SKU 轨迹。所有可见数字由服务端计算，附带复现戳与口径警示。",
+    "longDescription": "通过受治理的只读 MCP 查询月度市场估算数据，分析趋势、份额、增长贡献、价格带、品牌格局与单 SKU 轨迹。所有可见数字由服务端计算，附带复现戳与口径警示。",
     "developerName": "chenyu",
     "category": "Productivity",
     "capabilities": [],

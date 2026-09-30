@@ -1,13 +1,13 @@
 {
-  "name": "flywheel",
+  "name": "strategic",
   "owner": {
     "name": "chenyu"
   },
   "plugins": [
     {
-      "name": "flywheel-analytics",
+      "name": "strategic-analytics",
       "source": "./",
-      "description": "Flywheel 大盘数据分析插件：受治理 MCP + 自动路由 Skill"
+      "description": "战略大盘数据分析插件：受治理 MCP + 自动路由 Skill"
     }
   ]
 }

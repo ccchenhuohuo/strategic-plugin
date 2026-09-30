@@ -1,0 +1,265 @@
+{
+  "$comment": "战略季报默认配置（VIJIM/CMI 全球市场洞察）。分段只写完整类目路径，不写 SQL；路径须存在于 release 冻结的标准类目映射。窗口由调用方传入（current_start/current_end/label），不写死在配置里。 competition_segments 的元素可以是 trend_segments 里的 label，也可以是内联的 {label, paths}。",
+  "report_name": "CMI全球市场洞察报告",
+  "sites": [
+    "cn",
+    "US",
+    "DE",
+    "JP"
+  ],
+  "site_labels": {
+    "cn": "中国淘天",
+    "US": "美国Amazon",
+    "DE": "德国Amazon",
+    "JP": "日本Amazon"
+  },
+  "compare": [
+    "yoy",
+    "prior_period"
+  ],
+  "company_brands": [
+    "ULANZI/优篮子",
+    "FALCAM/小隼",
+    "Ulanzi&FALCAM"
+  ],
+  "drilldown": {
+    "competitor_brands": 5,
+    "products_per_brand": 5,
+    "company_products_per_brand": 5
+  },
+  "focus": [
+    {
+      "section_no": 3,
+      "std_l1": "脚架类",
+      "trend_segments": [
+        {
+          "label": "手机脚架",
+          "paths": [
+            {
+              "std_l1": "脚架类",
+              "std_l2": "手机脚架"
+            }
+          ]
+        },
+        {
+          "label": "相机脚架",
+          "paths": [
+            {
+              "std_l1": "脚架类",
+              "std_l2": "相机脚架"
+            }
+          ]
+        },
+        {
+          "label": "运动相机脚架",
+          "paths": [
+            {
+              "std_l1": "脚架类",
+              "std_l2": "运动相机脚架"
+            }
+          ]
+        }
+      ],
+      "competition_segments": [
+        "手机脚架",
+        "相机脚架",
+        "运动相机脚架"
+      ],
+      "price_mix_by": "std_l2"
+    },
+    {
+      "section_no": 4,
+      "std_l1": "支架类",
+      "trend_segments": [
+        {
+          "label": "汽车支架",
+          "paths": [
+            {
+              "std_l1": "支架类",
+              "std_l2": "汽车支架"
+            }
+          ]
+        },
+        {
+          "label": "桌面支架",
+          "paths": [
+            {
+              "std_l1": "支架类",
+              "std_l2": "非汽车支架",
+              "std_l3": "桌面支架"
+            }
+          ]
+        },
+        {
+          "label": "磁吸/气囊/指环扣支架",
+          "paths": [
+            {
+              "std_l1": "支架类",
+              "std_l2": "非汽车支架",
+              "std_l3": "磁吸支架"
+            },
+            {
+              "std_l1": "支架类",
+              "std_l2": "非汽车支架",
+              "std_l3": "气囊支架"
+            },
+            {
+              "std_l1": "支架类",
+              "std_l2": "非汽车支架",
+              "std_l3": "指环扣支架"
+            }
+          ]
+        },
+        {
+          "label": "俯拍/落地支架",
+          "paths": [
+            {
+              "std_l1": "支架类",
+              "std_l2": "非汽车支架",
+              "std_l3": "俯拍支架"
+            },
+            {
+              "std_l1": "支架类",
+              "std_l2": "非汽车支架",
+              "std_l3": "落地支架"
+            }
+          ]
+        },
+        {
+          "label": "挂脖/胸前支架",
+          "paths": [
+            {
+              "std_l1": "支架类",
+              "std_l2": "非汽车支架",
+              "std_l3": "挂脖/胸前支架"
+            }
+          ]
+        }
+      ],
+      "competition_segments": [
+        "汽车支架",
+        "磁吸/气囊/指环扣支架",
+        "俯拍/落地支架"
+      ],
+      "price_mix_by": "std_l2"
+    },
+    {
+      "section_no": 5,
+      "std_l1": "灯光类",
+      "trend_segments": [
+        {
+          "label": "环形灯",
+          "paths": [
+            {
+              "std_l1": "灯光类",
+              "std_l2": "环形灯"
+            }
+          ]
+        },
+        {
+          "label": "平板灯",
+          "paths": [
+            {
+              "std_l1": "灯光类",
+              "std_l2": "平板灯"
+            }
+          ]
+        },
+        {
+          "label": "COB补光灯",
+          "paths": [
+            {
+              "std_l1": "灯光类",
+              "std_l2": "COB补光灯"
+            }
+          ]
+        },
+        {
+          "label": "口袋灯/手机便携补光灯",
+          "paths": [
+            {
+              "std_l1": "灯光类",
+              "std_l2": "口袋灯"
+            },
+            {
+              "std_l1": "灯光类",
+              "std_l2": "手机便携补光灯"
+            }
+          ]
+        },
+        {
+          "label": "棒灯",
+          "paths": [
+            {
+              "std_l1": "灯光类",
+              "std_l2": "棒灯"
+            }
+          ]
+        },
+        {
+          "label": "摄影手电",
+          "paths": [
+            {
+              "std_l1": "灯光类",
+              "std_l2": "摄影手电"
+            }
+          ]
+        }
+      ],
+      "competition_segments": [
+        "环形灯",
+        "平板灯",
+        "COB补光灯",
+        "口袋灯/手机便携补光灯",
+        "棒灯"
+      ],
+      "price_mix_by": "std_l2"
+    },
+    {
+      "section_no": 6,
+      "std_l1": "音视频类",
+      "trend_segments": [
+        {
+          "label": "麦克风",
+          "paths": [
+            {
+              "std_l1": "音视频类",
+              "std_l2": "麦克风"
+            }
+          ]
+        },
+        {
+          "label": "自拍屏",
+          "paths": [
+            {
+              "std_l1": "音视频类",
+              "std_l2": "自拍屏"
+            }
+          ]
+        },
+        {
+          "label": "音视频类-其他",
+          "paths": [
+            {
+              "std_l1": "音视频类",
+              "std_l2": "音视频类-其他"
+            }
+          ]
+        }
+      ],
+      "competition_segments": [
+        {
+          "label": "无线麦克风",
+          "paths": [
+            {
+              "std_l1": "音视频类",
+              "std_l2": "麦克风",
+              "std_l3": "无线麦克风"
+            }
+          ]
+        }
+      ],
+      "price_mix_by": "std_l2"
+    }
+  ]
+}

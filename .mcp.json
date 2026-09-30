@@ -1,9 +1,9 @@
 {
-  "flywheel": {
+  "strategic": {
     "type": "http",
-    "url": "https://voc.ulanzi.com:28081/flywheel/mcp",
+    "url": "${user_config.strategic_url}",
     "headers": {
-      "Authorization": "Bearer ${FLYWHEEL_MCP_TOKEN}"
+      "Authorization": "Bearer ${user_config.strategic_token}"
     }
   }
 }

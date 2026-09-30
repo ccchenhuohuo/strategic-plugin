@@ -1,8 +1,29 @@
 {
-  "name": "flywheel-analytics",
-  "version": "0.2.10",
-  "description": "Flywheel 大盘分析：12 个受治理只读 MCP 工具，月度估算口径与复现戳；Skill 提供完整规则和能力路由，语义工具按需说明。",
+  "name": "strategic-analytics",
+  "version": "0.3.0",
+  "description": "战略大盘分析：14 个受治理只读 MCP 工具，月度估算口径与复现戳；Skill 提供完整规则和能力路由，语义工具按需说明。",
   "author": {
     "name": "chenyu"
+  },
+  "userConfig": {
+    "strategic_token": {
+      "type": "string",
+      "title": "访问令牌",
+      "description": "向插件维护者申请。保存在系统安全存储（macOS 钥匙串），不写进 settings.json。",
+      "sensitive": true,
+      "required": true
+    },
+    "strategic_url": {
+      "type": "string",
+      "title": "MCP 服务地址",
+      "description": "默认即生产服务，一般不用改；只在测试开发服务时修改。",
+      "default": "https://voc.ulanzi.com:28081/flywheel/mcp"
+    },
+    "feishu_output": {
+      "type": "boolean",
+      "title": "用飞书云文档输出季报",
+      "description": "开启后，校验通过的季报会在你的飞书个人空间生成云文档与附表（不共享）；需要本机已安装并登录 lark-cli。关闭则只输出 Markdown。",
+      "default": false
+    }
   }
 }
