@@ -9,7 +9,7 @@ export const meta = {
     { title: '执行摘要', detail: '各章完成后写全球趋势与重点类目要点' },
     { title: '校验', detail: '组装报告，机械校验骨架、数字溯源与禁用词' },
     { title: '修订', detail: '机械校验不过的叙述位重写一次，再校验' },
-    { title: '发布', detail: '校验通过后按开关生成个人空间飞书文档与附表；失败保留 Markdown' },
+    { title: '发布', detail: '校验通过后按输出方式生成个人空间飞书文档与附表；失败保留 Markdown' },
   ],
 }
 
@@ -252,7 +252,7 @@ let feishu = { status: 'skipped', error: '机械校验未通过，不发布到�
 if (check && check.ok) {
   phase('发布')
   const publishCommand = `node "<你的说明里给出的 report.mjs 路径>" publish --run-dir ${runDir} --output-env "<你的说明里给出的输出配置路径>"${unverifiedGroups.length ? ` --unverified ${unverifiedGroups.join(',')}` : ''}`
-  // 完整季报约 120 步、十几分钟：脚本每次运行约 8 分钟就在两步之间停下并返回 incomplete=true，这里按同一命令加 --resume 接着跑。
+  // 完整季报约 120 步、十几分钟：脚本每次运行约 6 分 40 秒（400 秒预算）就在两步之间停下并返回 incomplete=true，这里按同一命令加 --resume 接着跑。
   // 命令被外层超时杀掉而没有 JSON 时同样续跑；两者合计最多续跑 7 次。
   const MAX_RESUMES = 7
   let published = null
@@ -261,10 +261,10 @@ if (check && check.ok) {
     // 分段续跑（上次在两步之间正常停下）与中断续跑（上次被外层超时杀掉）的提醒不同。
     const resumeNote = !attempt ? [] : previous && previous.incomplete === true
       ? ['这是分段发布的续跑：上一段已在两步之间正常停下，从下一步接着执行。']
-      : ['这是因超时中断且未收到最后一行 JSON 的续跑。中断的那一步可能已部分写入，请核对文档末尾。']
+      : ['这是因超时中断且未收到最后一行 JSON 的续跑。若日志有待确认写入，脚本会拒绝重放并返回链接，请人工核对。']
     try {
       published = await agent([
-        '按输出开关发布已通过机械校验的报告。在 Bash 中执行（逐字使用路径，timeout=600000 ms）：',
+        '按输出方式发布已通过机械校验的报告。在 Bash 中执行（逐字使用路径，timeout=600000 ms）：',
         '',
         publishCommand + (attempt ? ' --resume' : ''),
         '',

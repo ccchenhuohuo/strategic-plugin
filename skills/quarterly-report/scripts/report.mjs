@@ -19,7 +19,8 @@ const help = `用法：
   node report.mjs check --run-dir DIR
   node report.mjs charts --run-dir DIR [--env-dir DIR] [--python PATH] [--only ID[,ID…]]
   node report.mjs publish --run-dir DIR --output-env FILE [--unverified id,id] [--resume] [--dry-run] [--time-budget 秒]
-  （完整季报发布约十几分钟：单次运行到时间预算（默认 480 秒）就在两步之间停下，返回 incomplete=true，用 --resume 续跑）
+  （完整季报发布约十几分钟：单次运行到时间预算（默认 400 秒）就在两步之间停下，返回 incomplete=true，用 --resume 续跑）
+  （不确定写入会拒绝自动重放；仅人工核对后用 --resume --retry-uncertain 重做，或 --resume --skip-uncertain 确认已写入后继续；两者不能同用）
   node report.mjs --help
 服务地址与令牌：设置了 STRATEGIC_MCP_URL 时只配对 STRATEGIC_MCP_TOKEN；否则若设置了
 FLYWHEEL_MCP_URL（已弃用）就只配对 FLYWHEEL_MCP_TOKEN，两族不得混用。
@@ -34,6 +35,7 @@ function options(argv) {
     connection: { type: 'string' }, 'run-dir': { type: 'string' }, help: { type: 'boolean' },
     'env-dir': { type: 'string' }, python: { type: 'string' }, only: { type: 'string' },
     'output-env': { type: 'string' }, unverified: { type: 'string' }, 'dry-run': { type: 'boolean' }, 'time-budget': { type: 'string' },
+    'retry-uncertain': { type: 'boolean' }, 'skip-uncertain': { type: 'boolean' },
   } });
 }
 
@@ -160,7 +162,8 @@ async function main() {
     const { publish } = await import('./lib/publish.mjs');
     output = await publish({ runDir: resolve(parsed.values['run-dir']), outputEnv: resolve(parsed.values['output-env']),
       unverified: parsed.values.unverified, resume: Boolean(parsed.values.resume), dryRun: Boolean(parsed.values['dry-run']),
-      timeBudget: parsed.values['time-budget'] });
+      timeBudget: parsed.values['time-budget'], retryUncertain: Boolean(parsed.values['retry-uncertain']),
+      skipUncertain: Boolean(parsed.values['skip-uncertain']) });
     if (!output.ok) process.exitCode = 1;
   } else throw new Error(`未知子命令：${command}`);
   console.log(JSON.stringify(redact(output)));

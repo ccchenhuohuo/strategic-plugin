@@ -27,11 +27,13 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/quarterly-report/scripts/report.mjs" publish 
   `slots`、`errors`）。`check` 的最后一行同样是 JSON 结果。你的回答必须以这些 JSON 为准，逐字段转述，不得补全或推测。
 - `charts` 与 `publish` 两条命令的 Bash 超时都设为 **600000 ms**。`charts` 最后一行返回图表计数与环境信息；出图失败、
   超时或没有返回都不阻断报告，原样回报。组装前必须等待出图任务结束。
-- `publish` 只能在最终机械校验通过后运行；输出开关关闭时脚本直接返回 Markdown 结果。**不要直接运行 lark-cli**，
+- `publish` 只能在最终机械校验通过后运行；输出方式为 Markdown 时脚本直接返回 Markdown 结果。**不要直接运行 lark-cli**，
   不共享、不改权限、不转移所有者、不删除任何东西。发布失败保留 Markdown，并回报脚本给出的错误与续跑命令。
-- 完整季报发布约十几分钟：`publish` 每次运行到时间预算（`--time-budget`，默认 480 秒）就在两步之间停下，返回 `incomplete=true`、
+- 完整季报发布约十几分钟：`publish` 每次运行到时间预算（`--time-budget`，默认 400 秒）就在两步之间停下，返回 `incomplete=true`、
   `completed`/`total` 与续跑命令；Workflow 按**同一命令**加 `--resume` 续跑直到完成。命令被外层超时杀掉而没有最后一行 JSON 时同样续跑，
-  但中断的那一步可能已部分写入，请核对文档末尾。两者合计最多续跑 7 次；其他失败 JSON 不自动续跑。
+  若日志留有待确认写入，脚本会拒绝重放并给出文档与附表链接，需人工核对。两者合计最多续跑 7 次；其他失败 JSON 不自动续跑。
+  仅人工可用 `--retry-uncertain` 重做或 `--skip-uncertain` 确认已写入后继续；已有文档 / 附表 id 时禁止再次创建。
+  Workflow 与 runner 一律不传这两个参数。400 秒预算加单次调用最长 181 秒，共 581 秒，留出外层 600 秒超时余量。
 - `prepare` 在慢网络下可能超过单次命令时限：进度写在 stderr，其中一行是 `RUN_DIR=<目录>`。命令因超时或中断结束、
   没有打印最后一行 JSON 时，用**完全相同的参数**再加 `--resume --out <RUN_DIR 目录>` 重跑（已成功的调用会直接复用），
   直到打印出 JSON；最多续跑 5 次。

@@ -1,6 +1,6 @@
 # strategic-analytics
 
-当前正式版：**0.3.0**（Strategic 改名与战略季报能力） · [正式发行版](https://github.com/ccchenhuohuo/strategic-plugin/releases/tag/v0.3.0) · [更新记录](CHANGELOG.md)
+当前正式版：**0.3.1**（季报输出方式改为下拉选择、飞书发布续跑防重复） · [正式发行版](https://github.com/ccchenhuohuo/strategic-plugin/releases/tag/v0.3.1) · [更新记录](CHANGELOG.md)
 
 Codex / Claude Code 插件：用受治理的只读 MCP 做大盘市场分析——趋势、份额、增长与贡献、排名与变化榜、
 价格带、品牌集中度与单品牌多月序列、标准类目与平台原始类目导航、单 SKU 搜索与逐月轨迹。
@@ -15,14 +15,16 @@ Codex / Claude Code 插件：用受治理的只读 MCP 做大盘市场分析—�
 按固定骨架取数、分章写市场洞察并做数字溯源校验；只写战略洞察，不写经营建议。
 
 季报默认输出 Markdown。需要飞书云文档时，在交互式 `claude` 终端执行
-`/plugin configure strategic-analytics@strategic`，开启「用飞书云文档输出季报」，新开会话后生效。
+`/plugin configure strategic-analytics@strategic`，把「季报输出方式」选为「飞书云文档」，新开会话后生效。已装 0.3.0 的用户更新后也需重新选择一次输出方式。
 机械校验通过后会在运行者的飞书个人空间根目录生成文档与同名附表，不共享；分享前请人工审阅。
 正文包含叙述、图表、分析表与品牌表，商品下钻明细和证据账本放附表，正文链接到对应子表。
 
 飞书输出需要本机已安装并登录 **lark-cli ≥ 1.0.81**，使用用户身份；所需权限包括
 `docx:document:create`、`docx:document`、`docs:document.media:upload`、`sheets:spreadsheet:create`、
 `sheets:spreadsheet:write_only`。未登录、令牌失效或缺权限时脚本报错并给出用户自行执行的登录授权命令；
-lark-cli 被卸载、找不到或发布失败时保留 Markdown。关闭开关时不会调用 lark-cli。
+lark-cli 被卸载、找不到或发布失败时保留 Markdown。选择 Markdown 时不会调用 lark-cli。
+发布每段默认运行 400 秒；正常分段可自动续跑，日志中留有待确认写入时会停止并给出已有链接，需人工打开文档与附表核对。
+人工核对后可用 `--resume --skip-uncertain` 确认已写入后继续，或 `--resume --retry-uncertain` 重做该步；已有资源 id 时不会再次创建。
 
 图表需要 **Python 3.12/3.13** 与中文字体。首次出图自动在插件数据目录创建环境，下载约 25 MB 的固定版本依赖；
 可以设置 `STRATEGIC_PIP_INDEX_URL` 指定包源，也可以用 `STRATEGIC_CHART_PYTHON` 指向符合锁定版本的解释器。
@@ -36,7 +38,7 @@ Markdown 与飞书使用同一批 PNG；报告引用的图片缺失会阻断机�
 
 | 依赖 | 说明 |
 |---|---|
-| 客户端 | Codex 或 Claude Code，需支持插件；0.3.0 源码的兼容性验证使用 Codex CLI 0.155.0-alpha.9.2、Claude Code 2.1.281 |
+| 客户端 | Codex 或 Claude Code，需支持插件；季报输出下拉选择要求 **Claude Code ≥ 2.1.271**（支持 `userConfig.options`）；0.3.0 源码的兼容性验证使用 Codex CLI 0.155.0-alpha.9.2、Claude Code 2.1.281 |
 | 访问令牌 | 向插件维护者申请。Claude Code 在插件配置框里填写（存系统钥匙串）；Codex 读环境变量 `STRATEGIC_MCP_TOKEN` |
 | 网络 | 能访问 MCP 端点（默认 `https://voc.ulanzi.com:28081`） |
 
@@ -82,8 +84,8 @@ launchctl setenv STRATEGIC_MCP_TOKEN "$STRATEGIC_MCP_TOKEN"
   配置与桌面端共用。
 - 季报脚本经 Bash 直连服务、读不到插件配置，所以每次会话启动时插件会把服务地址与令牌写进
   `~/.claude/plugins/data/strategic-analytics-strategic/connection.env`（仅本人可读；卸载插件时随数据目录删除），脚本从这里取用。
-- 同一会话钩子还把飞书开关和本机 lark-cli 路径写进数据目录的 `output.env`（0600）；不调用 lark-cli、不联网。
-  检测到 CLI 而开关未开启时只提示一次；更改开关或安装 CLI 后新开会话。
+- 同一会话钩子还把季报输出方式和本机 lark-cli 路径写进数据目录的 `output.env`（0600）；不调用 lark-cli、不联网。
+  检测到 CLI 而输出方式未选飞书云文档时只提示一次；更改输出方式或安装 CLI 后新开会话。
 
 ## 安装：Codex
 
@@ -125,7 +127,7 @@ Claude Code：在交互式 `claude` 会话里依次执行以下命令。0.3.0 �
 /plugin configure strategic-analytics@strategic
 ```
 
-在配置框填写访问令牌，服务地址保持默认；需要飞书季报时重新开启对应开关，然后新开会话。
+在配置框填写访问令牌，服务地址保持默认；需要飞书季报时把「季报输出方式」选为「飞书云文档」，然后新开会话。
 连接文件改在 `~/.claude/plugins/data/strategic-analytics-strategic/connection.env`，旧插件数据随卸载删除。
 
 Codex：在终端先卸载旧插件、删除旧市场，并清理可能残留的用户级 `flywheel` MCP 临时配置，再添加新市场、安装并配置令牌。
@@ -260,14 +262,14 @@ Codex 清单内联声明完整的同名服务器，覆盖默认发现的 Claude 
 季报脚本经 Bash 直连服务，Bash 的环境里没有插件配置：`hooks/connection.sh`（SessionStart）把地址与令牌写进
 `${CLAUDE_PLUGIN_DATA}/connection.env`（0600），runner Agent 以 `--connection` 交给脚本。地址与令牌总是成对取自
 同一来源：先按新旧变量族成对取环境连接，否则取带令牌的连接文件，再否则取默认地址与环境令牌（新名优先，旧名已弃用）。
-随后 `hooks/output.sh` 记录 `feishu_output` 与 CLI 路径到 `${CLAUDE_PLUGIN_DATA}/output.env`；图表托管环境放在
+随后 `hooks/output.sh` 把 `report_output` 的选择记为 `feishu=0/1`，与 CLI 路径写入 `${CLAUDE_PLUGIN_DATA}/output.env`；图表托管环境放在
 `${CLAUDE_PLUGIN_DATA}/chart-env`。Python 绘图器及锁定依赖文件位于 `skills/quarterly-report/scripts/charts/`，随 `skills/` 分发。
 
 发布制品必须同时包含 `.claude-plugin/`、`.codex-plugin/`、`.mcp.json`、`skills/`（含季报脚本与配置）、`agents/`、`workflows/`、`hooks/` 与本 README，
 注意打包时不要漏掉隐藏目录。两份 `plugin.json` 的名称和版本必须一致，Codex 清单里的 URL 必须等于 `strategic_url` 的默认值。
-当前源码版本为 0.3.0；发布时同步更新两份清单，旧版缓存不会因只修改源码而自动刷新。
+当前源码版本为 0.3.1；发布时同步更新两份清单，旧版缓存不会因只修改源码而自动刷新。
 服务端优先读取 `STRATEGIC_PORT` / `STRATEGIC_TOKEN` / `STRATEGIC_AUTH`，未设置时回退已弃用的 `FLYWHEEL_*`；
-生产 `/etc/flywheel-mcp.env`、systemd 服务名与部署目录本次保持不变。插件和服务端要在同一发布窗口切换，旧工具名不提供别名。
+MCP 的生产 `/etc/flywheel-mcp.env`、systemd 服务名与部署目录本次保持不变。0.3.0 改名时插件和服务端需在同一发布窗口切换，旧工具名不提供别名；0.3.1 的插件改动不要求更新 MCP 服务端。
 
 每次发布同时更新 README 与 CHANGELOG，将版本标签绑定到实际分发提交，并创建同版本 GitHub Release。
 发布后核对默认分支、两份插件清单、标签和 Releases 的最新版本一致；本机重新安装后核对 Skill 与分发文件一致。

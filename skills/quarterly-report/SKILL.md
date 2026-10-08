@@ -43,11 +43,11 @@ description: 用受治理工具生成战略季报（CMI 全球市场洞察）：
 没有显式环境地址时先取带令牌的连接文件；再否则取插件默认地址与环境令牌（新名优先、旧名已弃用）。
 脚本也可以单独运行：`node "${CLAUDE_PLUGIN_ROOT}/skills/quarterly-report/scripts/report.mjs" prepare|charts|assemble|check|publish --help`，取数时带 `--connection "${CLAUDE_PLUGIN_DATA}/connection.env"`。
 
-飞书输出默认关闭，只生成 Markdown。需要飞书云文档时，在交互式 `claude` 终端执行
-`/plugin configure strategic-analytics@strategic`，开启「用飞书云文档输出季报」，新开会话后生效；开关与本机 lark-cli 路径记录在
+季报输出方式默认选择 Markdown。需要飞书云文档时，在交互式 `claude` 终端执行
+`/plugin configure strategic-analytics@strategic`，把「季报输出方式」选为「飞书云文档」，新开会话后生效；输出方式与本机 lark-cli 路径记录在
 `${CLAUDE_PLUGIN_DATA}/output.env`。需要本机安装 lark-cli ≥ 1.0.81 并以用户身份登录，授权 `docx:document:create`、`docx:document`、
 `docs:document.media:upload`、`sheets:spreadsheet:create`、`sheets:spreadsheet:write_only`；实际缺失权限以脚本报错为准，由用户自己执行
-报错中的 `lark-cli auth login --scope "…"`。开启后仅在机械校验通过时发布；lark-cli 不可用、登录失效、权限不足或发布中断时明确报错，
+报错中的 `lark-cli auth login --scope "…"`。选为「飞书云文档」后仅在机械校验通过时发布；lark-cli 不可用、登录失效、权限不足或发布中断时明确报错，
 保留 Markdown。文档与同名附表只建在运行者的个人空间根目录，不共享；分享前人工审阅。
 
 图表从本次证据生成，取数成功后立即与分章写作并行，组装前等待。托管环境为 `${CLAUDE_PLUGIN_DATA}/chart-env`，需要 Python 3.12/3.13；

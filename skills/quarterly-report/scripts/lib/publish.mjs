@@ -256,7 +256,7 @@ function callError(result) {
   if (result.code === 10) return `lark-cli 要求高风险操作确认（退出码 10）；已停止，未追加 --yes：${error?.message ?? 'confirmation_required'}`;
   return String(error?.message ?? result.error ?? (result.json?.data?.result === 'partial_success' ? 'lark-cli 返回 partial_success' : `lark-cli 执行失败（退出码 ${result.code}）`));
 }
-function success(result, step) { return result.code === 0 && result.json?.ok === true && result.json.data?.result !== 'partial_success' && (step.argv?.[1] !== '+update' || result.json.data?.result === 'success'); }
+function success(result, step) { return !result.timedOut && result.code === 0 && result.json?.ok === true && result.json.data?.result !== 'partial_success' && (step.argv?.[1] !== '+update' || result.json.data?.result === 'success'); }
 function absorb(journal, result, step) {
   const data = result.json?.data ?? {};
   if (step.kind === 'workbook') {
@@ -292,9 +292,11 @@ async function publishImpl(input) {
   for (const token of mcpTokens(input.env ?? process.env)) addSecret(token);
   const options = { ...input, runDir: resolve(input.runDir), outputEnv: input.outputEnv ? resolve(input.outputEnv) : '', unverified: unique(Array.isArray(input.unverified) ? input.unverified : String(input.unverified ?? '').split(',')).map((id) => String(id).trim()).filter(Boolean) };
   // 完整季报约 120 步、十几分钟，超过 runner 单条命令 10 分钟时限。到预算就在两步之间停下交回续跑，
-  // 不让外层超时在某一步写到一半时杀掉进程（那样续跑会重做该步，文档里可能出现重复内容）。
-  const budgetSeconds = input.timeBudget === undefined || input.timeBudget === null || input.timeBudget === '' ? 480 : Number(input.timeBudget);
+  // 400 秒预算 + 单次调用最长 181 秒 = 581 秒，留出外层 600 秒超时余量；调用中断后由 pending 阻止自动重放。
+  const budgetSeconds = input.timeBudget === undefined || input.timeBudget === null || input.timeBudget === '' ? 400 : Number(input.timeBudget);
   if (!Number.isFinite(budgetSeconds) || budgetSeconds < 0) return { ok: false, target: 'markdown', error: '--time-budget 须为非负秒数' };
+  if (options.retryUncertain && options.skipUncertain) return { ok: false, target: 'markdown', error: '--retry-uncertain 与 --skip-uncertain 不能同用' };
+  if ((options.retryUncertain || options.skipUncertain) && !options.resume) return { ok: false, target: 'markdown', error: '人工处理不确定步骤需要 --resume' };
   const startedAt = Date.now();
   const report = join(options.runDir, 'report.md');
   let output;
@@ -321,6 +323,30 @@ async function publishImpl(input) {
   await writeArtifact(options.runDir, 'publish/workbook.json', json(plan.workbook));
   for (const [path, xml] of Object.entries(plan.files)) await writeArtifact(options.runDir, path, xml);
   if (options.dryRun) return { ok: true, target: 'feishu', dry_run: true, plan: join(options.runDir, 'publish/plan.json'), steps: plan.steps.map(({ number, kind, argv, estimated_blocks, chars, conditional }) => ({ number, kind, argv, estimated_blocks, ...(chars !== undefined ? { chars } : {}), ...(conditional ? { conditional } : {}) })), estimated_blocks: plan.stats.estimated_blocks, ...plan.stats };
+  journal ??= { version: 1, plan_digest: plan.digest, document_id: null, doc_url: null, workbook_token: null, workbook_url: null, sheet_ids: {}, completed: [] };
+  savedJournal = journal;
+  if (!Array.isArray(journal.completed) || !journal.sheet_ids || journal.completed.some((number, index) => number !== index + 1 || !plan.steps.some((step) => step.number === number))) return fail('发布日志损坏，拒绝续跑', { failed_step: 'journal', resume: command(options, true) });
+  if (journal.pending && (!plan.steps.some((step) => step.number === journal.pending.step && step.write) || typeof journal.pending.started_at !== 'string' || !Number.isFinite(Date.parse(journal.pending.started_at)) || (!journal.completed.includes(journal.pending.step) && journal.pending.step !== journal.completed.length + 1))) return fail('发布日志 pending 损坏，拒绝续跑', { failed_step: 'journal', resume: command(options, true) });
+  if (journal.pending && journal.completed.includes(journal.pending.step)) delete journal.pending;
+  const next = plan.steps[journal.completed.length];
+  const hasResource = (step) => step?.kind === 'create' ? !!journal.document_id : step?.kind === 'workbook' ? !!journal.workbook_token : false;
+  // Older journals may contain a returned resource id without a completed step.
+  // Treat that as uncertain too, and never issue another create for that resource.
+  if (!journal.pending && hasResource(next)) journal.pending = { step: next.number, started_at: new Date().toISOString() };
+  if (journal.pending) {
+    await atomicJson(journalPath, journal);
+    const step = plan.steps[journal.pending.step - 1];
+    const uncertain = (suffix = '') => fail(`第 ${step.number} 步结果不确定，可能已写入，请打开文档核对${suffix}`, { failed_step: String(step.number), resume: command(options, true) });
+    if (!options.retryUncertain && !options.skipUncertain) return uncertain('；仅人工核对后可用 --retry-uncertain 重做或 --skip-uncertain 确认已写入后继续');
+    if (options.retryUncertain && hasResource(step)) return uncertain('；日志已有资源 id，禁止再次创建，请人工核对后使用 --skip-uncertain');
+    if (options.skipUncertain) {
+      if ((step.kind === 'create' && (!journal.document_id || !journal.doc_url)) || (step.kind === 'workbook' && (!journal.workbook_token || !journal.workbook_url))) return uncertain('；日志缺少资源 id 或链接，无法跳过创建步骤，请人工补齐日志');
+      journal.completed.push(step.number);
+      delete journal.pending;
+      await atomicJson(journalPath, journal);
+    }
+    // Explicit retry keeps pending until the retried call is durably completed.
+  }
   const env = input.env ?? process.env;
   const lark = (env.LARK_CLI ? await fromPath(env.LARK_CLI, env) : null) ?? (config.lark_cli ? await executable(config.lark_cli) : null) ?? await fromPath('lark-cli', env);
   if (!lark) return fail(`已开启飞书输出，但找不到 lark-cli；请安装并登录 lark-cli 后重试：${command(options, !!journal)}`, { failed_step: 'cli', resume: command(options, true) });
@@ -338,9 +364,6 @@ async function publishImpl(input) {
   if (auth.code !== 0 || !auth.json || auth.json.ok === false || !ready || !valid) return fail(`飞书用户身份未就绪或令牌失效且无法刷新；请用户自行执行 ${login(REQUIRED_SCOPES)}`, { failed_step: 'auth', resume: command(options, true) });
   const scopes = scopeList(user.scope), missing = REQUIRED_SCOPES.filter((scope) => !scopes.includes(scope));
   if (missing.length) return fail(`飞书权限不足；请用户自行执行 ${login(missing)}`, { failed_step: 'auth', resume: command(options, true) });
-  journal ??= { version: 1, plan_digest: plan.digest, document_id: null, doc_url: null, workbook_token: null, workbook_url: null, sheet_ids: {}, completed: [] };
-  if (!Array.isArray(journal.completed) || !journal.sheet_ids || journal.completed.some((number, index) => number !== index + 1 || !plan.steps.some((step) => step.number === number))) return fail('发布日志损坏，拒绝续跑', { failed_step: 'journal', resume: command(options, true) });
-  if (options.resume && journal.completed.length < plan.steps.length) process.stderr.write('中断的那一步可能已部分写入，请核对文档末尾。\n');
   await atomicJson(journalPath, journal);
   let lastWrite = Number.isFinite(journal.last_write_at) ? journal.last_write_at : 0;
   let executed = 0;
@@ -351,6 +374,11 @@ async function publishImpl(input) {
     }
     process.stderr.write(`发布：${step.number}/${plan.steps.length} ${step.kind}${step.chart_id ? ` ${step.chart_id}` : ''}\n`);
     try {
+      if (hasResource(step)) {
+        journal.pending = { step: step.number, started_at: new Date().toISOString() };
+        await atomicJson(journalPath, journal);
+        throw new Error(`第 ${step.number} 步结果不确定，可能已写入，请打开文档核对；日志已有资源 id，禁止再次创建，请人工核对后使用 --skip-uncertain`);
+      }
       if (step.kind === 'workbook_info' && Object.values(plan.links).every((name) => journal.sheet_ids[name])) { journal.completed.push(step.number); await atomicJson(journalPath, journal); continue; }
       const argv = step.argv.map((arg) => arg === '__DOCUMENT_ID__' ? journal.document_id : arg === '__WORKBOOK_TOKEN__' ? journal.workbook_token : arg);
       if (argv.some((arg) => arg === null || arg === undefined)) throw new Error('发布日志缺少当前步骤需要的资源 id');
@@ -358,6 +386,8 @@ async function publishImpl(input) {
       if (step.write) {
         const delay = 400 - (Date.now() - lastWrite);
         if (delay > 0) await new Promise((done) => setTimeout(done, delay));
+        journal.pending = { step: step.number, started_at: new Date().toISOString() };
+        await atomicJson(journalPath, journal);
       }
       const result = await call(lark, argv, options.runDir, env);
       if (step.write) {
@@ -367,13 +397,16 @@ async function publishImpl(input) {
       // Preserve returned resource identity even on partial failures; do not
       // persist stdout, auth state or credentials in the journal.
       if (step.kind === 'workbook' || step.kind === 'create') {
-        try { absorb(journal, result, step); } catch (error) { if (success(result, step)) throw error; }
+        let identityError;
+        try { absorb(journal, result, step); } catch (error) { identityError = error; }
         await atomicJson(journalPath, journal);
+        if (identityError && success(result, step)) throw identityError;
       }
       if (!success(result, step)) throw new Error(callError(result));
       absorb(journal, result, step);
       if (step.kind === 'workbook_info' && !Object.values(plan.links).every((name) => journal.sheet_ids[name])) throw new Error('附表子表 id 查询不完整，请核对附表');
       journal.completed.push(step.number);
+      if (step.write) delete journal.pending;
       executed++;
       await atomicJson(journalPath, journal);
     } catch (error) { return fail(error.message, { doc_url: journal.doc_url ?? undefined, workbook_url: journal.workbook_url ?? undefined, failed_step: String(step.number), resume: command(options, true) }); }

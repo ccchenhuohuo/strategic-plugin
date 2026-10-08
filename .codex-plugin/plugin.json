@@ -1,6 +1,6 @@
 {
   "name": "strategic-analytics",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "战略大盘分析：14 个受治理只读 MCP 工具，月度估算口径与复现戳；Skill 提供完整规则和能力路由，语义工具按需说明。",
   "author": {
     "name": "chenyu"
