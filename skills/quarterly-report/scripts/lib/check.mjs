@@ -1,7 +1,9 @@
-import { access, readFile } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
-import { asArray, readJson, unique, writeJson } from './common.mjs';
+import { join } from 'node:path';
+import { asArray, redact, writeJson } from './common.mjs';
 import { ADVICE, CAUSAL, PRICE_CLAIMS } from './lexicon.mjs';
+import { readViewTable, renderReport } from './artifacts.mjs';
+import { reportSnapshot } from './check-binding.mjs';
+import { captureInputs, chartReferences } from './input-view.mjs';
 
 const tokenPattern = /([+\-−]?)(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(亿件|万件|亿|万|件|pp|%)?/gu;
 const normalized = (text) => String(text).replaceAll('−', '-').replaceAll(',', '');
@@ -57,20 +59,30 @@ function traceAllowed(token, allowed, labels) {
   return [...allowed].some((item) => item.replace(/^[+-]/u, '') === token);
 }
 
-async function optionalText(path) {
-  try { return await readFile(path, 'utf8'); }
-  catch (error) { if (error.code === 'ENOENT') return ''; throw error; }
-}
-
 export async function check(runDir) {
-  const manifest = await readJson(join(runDir, 'manifest.json'));
   const blocking = [], warnings = [];
+  const reportPath = join(runDir, 'report.md');
+  let snapshot;
+  try { snapshot = await reportSnapshot(reportPath); }
+  catch (error) { blocking.push({ type: 'report_unavailable', detail: `正文不存在或不可读：${error.message}`, excerpt: 'report.md' }); }
+  const view = await captureInputs(runDir, { reportSnapshot: snapshot ?? null });
+  const manifest = view.json('manifest.json');
+  if (snapshot) {
+    try {
+      const expected = Buffer.from(redact(renderReport(view)), 'utf8');
+      if (!snapshot.bytes.equals(expected)) blocking.push({ type: 'report_content', detail: '正文与当前草稿、表格和证据的组装结果不一致，请重新 assemble 后 check', excerpt: 'report.md' });
+    } catch (error) {
+      blocking.push({ type: 'report_content', detail: `无法核对正文的组装结果：${error.message}`, excerpt: 'report.md' });
+    }
+  }
   let tables = 0, slots = 0, numbersChecked = 0;
   for (const chapter of manifest.chapters) {
     for (const table of chapter.tables) {
       tables++;
       if (table.status !== 'ok' && !table.reason) blocking.push({ table: table.table_id, type: 'skeleton', detail: '非 ok 表位没有明确状态说明', excerpt: table.title });
-      if (!await optionalText(join(runDir, table.path))) blocking.push({ table: table.table_id, type: 'skeleton', detail: '表格文件缺失或为空', excerpt: table.path });
+      if (!view.text(table.path, true)) blocking.push({ table: table.table_id, type: 'skeleton', detail: '表格文件缺失或为空', excerpt: table.path });
+      try { readViewTable(view, table); }
+      catch (error) { blocking.push({ table: table.table_id, type: 'table_content', detail: error.message, excerpt: table.path }); }
     }
     for (const drill of chapter.drilldowns) {
       if (!drill.table_ids?.length && !drill.explanation) blocking.push({ table: drill.id, type: 'drilldown', detail: '下钻位缺少表与说明', excerpt: drill.id });
@@ -79,10 +91,13 @@ export async function check(runDir) {
     }
     for (const slot of chapter.slots) {
       slots++;
-      const draft = (await optionalText(join(runDir, slot.draft))).trim();
+      const draft = view.text(slot.draft, true).trim();
       if (!draft) { blocking.push({ slot: slot.slot, type: 'skeleton', detail: '叙述草稿缺失或为空', excerpt: slot.draft }); continue; }
       let digest;
-      try { digest = await readJson(join(runDir, slot.digest)); }
+      try {
+        digest = view.json(slot.digest);
+        if (!digest || !Array.isArray(digest.allowed_numbers) || digest.allowed_numbers.some((item) => typeof item !== 'string') || !Array.isArray(digest.tables)) throw new Error('摘要格式损坏');
+      }
       catch { blocking.push({ slot: slot.slot, type: 'digest', detail: '摘要缺失或不可读', excerpt: slot.digest }); continue; }
       const allowed = new Set(asArray(digest.allowed_numbers).map(normalized));
       const labels = labelNumbers(digest);
@@ -103,16 +118,16 @@ export async function check(runDir) {
       }
     }
   }
-  const note = await optionalText(join(runDir, manifest.data_note));
+  const note = view.text(manifest.data_note, true);
   for (const word of ['估算', '缺失≠零', '固定汇率', '截断']) if (!note.includes(word)) blocking.push({ type: 'consistency', detail: `数据说明缺少必需警示：${word}`, excerpt: manifest.data_note });
   let ledger = [];
-  try { ledger = (await optionalText(join(runDir, 'ledger.jsonl'))).trim().split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line)); }
+  try { ledger = view.text('ledger.jsonl', true).trim().split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line)); }
   catch { blocking.push({ type: 'consistency', detail: '证据账本不可读', excerpt: 'ledger.jsonl' }); }
   if (!ledger.length) blocking.push({ type: 'consistency', detail: '证据账本为空', excerpt: 'ledger.jsonl' });
   const releases = new Set();
   for (const item of ledger.filter((entry) => entry.ok)) {
     try {
-      const evidence = await readJson(join(runDir, `evidence/${item.id}.json`));
+      const evidence = view.json(`evidence/${item.id}.json`);
       const release = evidence.envelope?.stamp?.release_id;
       if (!release || release !== item.release_id) blocking.push({ type: 'consistency', detail: `证据 ${item.id} 的 release_id 缺失或与账本不一致`, excerpt: item.id });
       else releases.add(release);
@@ -121,19 +136,31 @@ export async function check(runDir) {
   if (releases.size !== 1 || !releases.has(manifest.release_id)) blocking.push({ type: 'consistency', detail: '成功证据的 release_id 不一致或与 manifest 不符', excerpt: [...releases].join('、') });
   for (const item of ledger.filter((entry) => !entry.ok)) warnings.push({ evidence: item.id, detail: item.error?.message ?? '取数失败' });
   let charts = [];
-  try { charts = asArray((await readJson(join(runDir, 'charts/index.json'))).charts); }
+  try { if (view.snapshot('charts/index.json')) charts = asArray(view.json('charts/index.json').charts); }
   catch (error) {
     if (error.code !== 'ENOENT') warnings.push({ type: 'chart', detail: '图表索引不可读', excerpt: 'charts/index.json' });
   }
   for (const chart of charts.filter((item) => item.status !== 'ok')) warnings.push({ type: 'chart', chart: chart.id, detail: chart.reason ?? `图表 ${chart.status}`, excerpt: chart.title });
-  const reportText = await optionalText(join(runDir, 'report.md'));
-  for (const match of reportText.matchAll(/!\[[^\n]*?\]\((charts\/[^\n)]+)\)/gu)) {
-    const image = resolve(runDir, match[1]), inside = relative(resolve(runDir), image);
-    let exists = !inside.startsWith('..') && !inside.startsWith('/');
-    if (exists) try { await access(image); } catch { exists = false; }
-    if (!exists) blocking.push({ type: 'chart_missing', detail: `报告引用的图文件不存在：${match[1]}`, excerpt: match[0] });
+  const reportText = snapshot?.bytes.toString('utf8') ?? '';
+  for (const path of chartReferences(reportText)) {
+    if (!view.snapshot(path)) blocking.push({ type: 'chart_missing', detail: `报告引用的图文件不存在：${path}`, excerpt: path });
   }
-  const result = { ok: blocking.length === 0, blocking, warnings, stats: { tables, slots, numbers_checked: numbersChecked, charts: charts.length } };
+  let stable = true;
+  try { await view.assertUnchanged(); }
+  catch (error) {
+    stable = false;
+    snapshot = null;
+    blocking.push({ type: 'report_changed', detail: `输入校验期间变化或不可读：${error.message}`, excerpt: 'report.md' });
+  }
+  const result = { ok: blocking.length === 0, report_sha256: snapshot?.sha256 ?? null, input_binding: stable ? view.binding : null, blocking, warnings, stats: { tables, slots, numbers_checked: numbersChecked, charts: charts.length } };
   await writeJson(join(runDir, 'check.json'), result);
+  try { await view.assertUnchanged(); }
+  catch (error) {
+    result.ok = false;
+    result.report_sha256 = null;
+    result.input_binding = null;
+    blocking.push({ type: 'report_changed', detail: `写出校验结果期间输入变化或不可读：${error.message}`, excerpt: 'report.md' });
+    await writeJson(join(runDir, 'check.json'), result);
+  }
   return result;
 }

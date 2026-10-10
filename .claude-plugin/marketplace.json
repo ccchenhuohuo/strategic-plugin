@@ -7,7 +7,7 @@
     {
       "name": "strategic-analytics",
       "source": "./",
-      "description": "战略大盘数据分析插件：受治理 MCP + 自动路由 Skill"
+      "description": "战略大盘分析：窗口比较、品牌与商品竞争、证据驱动季报；共用 Skill、受治理 MCP 与脚本引擎。"
     }
   ]
 }

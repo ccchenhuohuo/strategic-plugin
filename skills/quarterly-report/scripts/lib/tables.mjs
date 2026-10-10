@@ -64,7 +64,11 @@ export async function readTable(runDir, id) {
     if (!metadata) throw new Error(`manifest 缺少表位：${id}`);
     return parseMarkdownTable(await readFile(join(runDir, metadata.path), 'utf8'), { ...metadata, id });
   }
-  if (table.id !== id || typeof table.title !== 'string' || typeof table.status !== 'string'
+  return validateTable(table, id);
+}
+
+export function validateTable(table, id) {
+  if (!table || table.id !== id || typeof table.title !== 'string' || typeof table.status !== 'string'
       || !['columns', 'rows', 'footer', 'notes', 'evidence'].every((key) => Array.isArray(table[key]))
       || !['columns', 'footer', 'notes', 'evidence'].every((key) => table[key].every((item) => typeof item === 'string'))
       || !(table.reason === null || typeof table.reason === 'string')

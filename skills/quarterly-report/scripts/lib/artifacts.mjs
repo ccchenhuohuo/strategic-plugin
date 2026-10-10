@@ -1,8 +1,10 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { asArray, json, safeName, unique, writeArtifact } from './common.mjs';
 import { competitionSegments } from './plan.mjs';
-import { tableJson } from './tables.mjs';
+import { parseMarkdownTable, tableJson, validateTable } from './tables.mjs';
+import { captureInputs } from './input-view.mjs';
+import { writeRunManifest } from './run-binding.mjs';
 
 const tablePath = (id) => `tables/${safeName(id)}.md`;
 const digestPath = (slot) => `digests/${safeName(slot)}.json`;
@@ -163,16 +165,28 @@ export async function writeArtifacts(runDir, manifest, tables, results, focuses,
     const digest = { slot: slot.slot, title: slot.title, window: { label: manifest.label, current: manifest.windows.current ?? null, yoy: manifest.windows.yoy ?? null, prior_period: manifest.windows.prior_period ?? null }, tables: listed.map(digestTable), notes, statuses: listed.map((table) => ({ table: table.id, status: table.status, ...(table.reason ? { reason: table.reason } : {}) })), allowed_numbers: unique(listed.flatMap((table) => table.allowed_numbers)) };
     await writeArtifact(runDir, slot.digest, json(digest));
   }
-  await writeArtifact(runDir, 'manifest.json', json(manifest));
+  // Preserve the complete previous identity if the final manifest commit fails.
+  await writeRunManifest(runDir, manifest);
 }
 
-export async function assemble(runDir) {
-  const manifest = JSON.parse(await readFile(join(runDir, 'manifest.json'), 'utf8'));
+/** Same projection for checking and publishing, including legacy Markdown-only
+ * tables. JSON presence/absence is bound; present JSON must reproduce the MD. */
+export function readViewTable(view, metadata) {
+  const id = metadata.table_id, path = `tables/${safeName(id)}.json`;
+  const markdown = view.text(metadata.path);
+  const table = validateTable(view.snapshot(path) ? view.json(path) : parseMarkdownTable(markdown, { ...metadata, id }), id);
+  if (!table.columns.length || renderTable(table) !== markdown) throw new Error(`表格 JSON / Markdown 与同源 renderTable 不一致：${id}`);
+  return table;
+}
+
+/** Pure rendering: every byte comes from the supplied input view. */
+export function renderReport(view) {
+  const manifest = view.json('manifest.json');
   let charts = [];
-  try { charts = asArray(JSON.parse(await readFile(join(runDir, 'charts/index.json'), 'utf8')).charts); }
+  try { charts = asArray(view.json('charts/index.json').charts); }
   // Optional output can be interrupted midway; check records a warning for a bad index.
   catch { charts = []; }
-  const lines = [`# ${manifest.report_name} - ${manifest.label}`, '', (await readFile(join(runDir, manifest.data_note), 'utf8')).trimEnd(), ''];
+  const lines = [`# ${manifest.report_name} - ${manifest.label}`, '', view.text(manifest.data_note).trimEnd(), ''];
   for (const chapter of manifest.chapters) {
     lines.push(`## ${chapter.title}`, '');
     for (const block of chapter.blocks) {
@@ -183,27 +197,33 @@ export async function assemble(runDir) {
         for (const chart of charts.filter((item) => item.status === 'ok' && item.before_table === block.id)) {
           lines.push(`![${chart.caption}](charts/${chart.file})`, chart.caption, `证据：${chart.evidence.join('、')}`, '');
         }
-        lines.push((await readFile(join(runDir, table.path), 'utf8')).trimEnd(), '');
+        lines.push(view.text(table.path).trimEnd(), '');
       } else {
         const slot = chapter.slots.find((item) => item.slot === block.id);
         lines.push(`### ${slot.title}`, '');
-        let draft = '';
-        try { draft = (await readFile(join(runDir, slot.draft), 'utf8')).trim(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        const draft = view.text(slot.draft, true).trim();
         lines.push(draft || `<!-- MISSING slot:${slot.slot} -->\n（待补写）`, '');
       }
     }
   }
-  const ledger = (await readFile(join(runDir, 'ledger.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const ledger = view.text('ledger.jsonl').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
   lines.push('## 附录：证据账本与口径警示', '', '| 证据 | 工具 | query_id | release_id | 状态 |', '| --- | --- | --- | --- | --- |');
   for (const record of ledger) lines.push(`| ${record.id} | ${record.tool} | ${record.query_id ?? '—'} | ${record.release_id ?? '—'} | ${record.ok ? 'ok' : record.error?.message ?? 'failed'} |`);
   lines.push('');
   const caveats = [];
   for (const record of ledger.filter((item) => item.ok)) {
-    const evidence = JSON.parse(await readFile(join(runDir, `evidence/${record.id}.json`), 'utf8'));
+    const evidence = view.json(`evidence/${record.id}.json`);
     caveats.push(...asArray(evidence.envelope?.caveats), ...asArray(evidence.envelope?.coverage_notes));
   }
   lines.push(...unique(caveats).map((item) => `- ${item}`), '');
+  return lines.join('\n');
+}
+
+export async function assemble(runDir) {
+  const view = await captureInputs(runDir, { report: false });
+  const text = renderReport(view);
+  await view.assertUnchanged();
   const report = join(runDir, 'report.md');
-  await writeArtifact(runDir, 'report.md', lines.join('\n'));
+  await writeArtifact(runDir, 'report.md', text);
   return { ok: true, report };
 }

@@ -1,11 +1,21 @@
 {
   "name": "strategic-analytics",
-  "version": "0.3.1",
-  "description": "战略大盘分析：14 个受治理只读 MCP 工具，月度估算口径与复现戳；Skill 提供完整规则和能力路由，语义工具按需说明。",
+  "version": "0.3.2",
+  "description": "战略大盘分析：14 个受治理只读 MCP 工具；共用分析与季报 Skill、配对连接和确定性脚本，数字附复现戳与口径警示。",
   "author": {
     "name": "chenyu"
   },
-  "skills": "./skills/",
+  "skills": [
+    "./skills/strategic-analytics/",
+    "./skills/quarterly-report/",
+    "./codex/skills/strategic-setup/"
+  ],
+  "hooks": "./codex/hooks.json",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./codex/skills/strategic-setup/SKILL.md"
+    }
+  },
   "mcpServers": {
     "strategic": {
       "type": "http",
@@ -15,15 +25,16 @@
   },
   "interface": {
     "displayName": "战略大盘分析",
-    "shortDescription": "受治理的市场趋势、份额、品牌与 SKU 分析",
-    "longDescription": "通过受治理的只读 MCP 查询月度市场估算数据，分析趋势、份额、增长贡献、价格带、品牌格局与单 SKU 轨迹。所有可见数字由服务端计算，附带复现戳与口径警示。",
+    "shortDescription": "受治理的市场分析、窗口比较与战略季报",
+    "longDescription": "分析市场趋势、窗口增长分解、品牌与商品排名及独立行业背景。共用季报 Skill 按固定阶段执行，角色写洞察，脚本生成证据、表格并校验、收录；支持可选飞书同步。Codex setup 核对实际本地 MCP/bearer 声明。业务数字由受治理服务计算。",
     "developerName": "chenyu",
     "category": "Productivity",
     "capabilities": [],
     "defaultPrompt": [
       "最近三个月大盘整体表现怎么样？",
       "当前数据覆盖哪些平台、站点和月份？",
-      "Amazon US 最近完整月的品牌集中度如何？"
+      "Amazon US 最近完整月的品牌集中度如何？",
+      "帮我设置季报的本地收录目录和飞书同步偏好。"
     ]
   }
 }

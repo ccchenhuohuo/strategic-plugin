@@ -1,12 +1,16 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
+import { access, mkdir, open, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { delimiter, isAbsolute, join, resolve } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { addSecret, asArray, json, readJson, redact, unique, writeArtifact } from './common.mjs';
-import { readTable } from './tables.mjs';
+import { addSecret, asArray, json, readJson, redact, unique } from './common.mjs';
+import { readViewTable, renderReport } from './artifacts.mjs';
 import { mcpTokens, withoutMcpTokens } from './environment.mjs';
+import { boundOutput } from './portable-binding.mjs';
+import { outputBinding } from './output-binding.mjs';
+import { checkBinding, reportSnapshot } from './check-binding.mjs';
+import { assertInputCopy, captureInputs, inputParents } from './input-view.mjs';
 
 // Personal-space publication only. These commands never set parents, share,
 // change permissions or ownership, delete resources, or add --yes.
@@ -24,7 +28,6 @@ const relative = (path) => {
   return path;
 };
 const optionalJson = async (path) => { try { return await readJson(path); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
-const readRelative = (runDir, path) => readFile(join(runDir, relative(path)), 'utf8');
 const quote = (text) => `'${String(text).replaceAll("'", "'\\''")}'`;
 const command = (options, resume = false) => `node ${quote(SCRIPT)} publish --run-dir ${quote(resolve(options.runDir))} --output-env ${quote(resolve(options.outputEnv))}${options.unverified.length ? ` --unverified ${quote(options.unverified.join(','))}` : ''}${resume ? ' --resume' : ''}`;
 
@@ -103,21 +106,23 @@ function sheetName(name, used) {
   used.add(output); return output;
 }
 
-async function buildPlan(runDir, unverified) {
-  const manifest = await readJson(join(runDir, 'manifest.json'));
+function buildPlan(view, unverified, reportSha256) {
+  const manifest = view.json('manifest.json');
   if (!manifest.report_name || !manifest.label || !manifest.release_id || !Array.isArray(manifest.chapters)) throw new Error('运行目录 manifest.json 损坏');
-  const ledger = (await readFile(join(runDir, 'ledger.jsonl'), 'utf8')).split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
+  const ledger = view.text('ledger.jsonl').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
   const allIds = unique(manifest.chapters.flatMap((chapter) => asArray(chapter.tables).map((table) => table.table_id)));
-  const tables = new Map(await Promise.all(allIds.map(async (id) => [id, await readTable(runDir, id)])));
+  const tables = new Map(manifest.chapters.flatMap((chapter) => asArray(chapter.tables)).map((metadata) => [metadata.table_id, readViewTable(view, metadata)]));
   let chartIndex;
-  try { chartIndex = await optionalJson(join(runDir, 'charts/index.json')); }
+  try { if (view.snapshot('charts/index.json')) chartIndex = view.json('charts/index.json'); }
   catch (error) { if (!(error instanceof SyntaxError)) throw error; /* Optional charts never block report publication. */ }
   const charts = asArray(chartIndex?.charts ?? (Array.isArray(chartIndex) ? chartIndex : []));
   const passed = charts.filter((chart) => chart.status === 'ok');
   const chartHashes = [];
   for (const chart of passed) {
     if (!chart.file || chart.file.includes('/') || chart.file.includes('\\')) throw new Error(`图 ${chart.id} 的文件名损坏`);
-    chartHashes.push([chart.id, sha(await readFile(join(runDir, relative(`charts/${chart.file}`))))]);
+    const image = view.snapshot(relative(`charts/${chart.file}`));
+    if (!image) throw new Error(`报告引用的图文件不存在：charts/${chart.file}`);
+    chartHashes.push([chart.id, image.sha256]);
   }
   const byAnchor = new Map();
   for (const chart of passed) { const list = byAnchor.get(chart.before_table) ?? []; list.push(chart); byAnchor.set(chart.before_table, list); }
@@ -153,7 +158,7 @@ async function buildPlan(runDir, unverified) {
   const workbook = { sheets: [...groups.map((group) => ({ name: group.name, columns: PRODUCT_COLUMNS, data: group.data, dtypes: Object.fromEntries(PRODUCT_COLUMNS.map((column) => [column, 'object'])) })), { name: '证据账本', columns: ['证据', '工具', 'query_id', 'release_id', '状态'], data: ledger.map((record) => [record.id, record.tool, record.query_id ?? '—', record.release_id ?? '—', record.ok ? 'ok' : record.error?.message ?? 'failed'].map(String)), dtypes: { 证据: 'object', 工具: 'object', query_id: 'object', release_id: 'object', 状态: 'object' } }] };
   const links = { ledger: '证据账本', ...Object.fromEntries(groups.map((group) => [group.key, group.name])) };
   const link = (key, text) => `<a href="__FW_WORKBOOK_${key}__">${esc(text)}</a>`;
-  const content = [...markdownXml(await readRelative(runDir, manifest.data_note))];
+  const content = [...markdownXml(view.text(manifest.data_note))];
   for (const chapter of manifest.chapters) {
     content.push(item(`<h1>${esc(chapter.title)}</h1>`));
     for (const block of asArray(chapter.blocks)) {
@@ -161,7 +166,7 @@ async function buildPlan(runDir, unverified) {
       else if (block.type === 'slot') {
         const slot = asArray(chapter.slots).find((entry) => entry.slot === block.id);
         if (!slot) throw new Error(`缺少叙述位 ${block.id}`);
-        const body = [item(`<h2>${inline(slot.title)}</h2>`), ...markdownXml(await readRelative(runDir, slot.draft))];
+        const body = [item(`<h2>${inline(slot.title)}</h2>`), ...markdownXml(view.text(slot.draft))];
         content.push(block.id === 'exec.global' ? item(`<callout emoji="📝">${body.map((entry) => entry.xml).join('\n')}</callout>`, 1 + body.reduce((sum, entry) => sum + entry.blocks, 0)) : body);
       } else if (block.type === 'table') {
         if (isProduct(block.id)) continue;
@@ -180,7 +185,7 @@ async function buildPlan(runDir, unverified) {
   content.push(item('<h1>附录：证据账本与口径警示</h1>'), item(`<p>${link('ledger', '证据账本')}</p>`));
   const caveats = [];
   for (const record of ledger.filter((entry) => entry.ok)) {
-    const evidence = await readJson(join(runDir, relative(`evidence/${record.id}.json`)));
+    const evidence = view.json(relative(`evidence/${record.id}.json`));
     caveats.push(...asArray(evidence.envelope?.caveats), ...asArray(evidence.envelope?.coverage_notes));
   }
   for (const warning of unique(caveats)) content.push(item(`<p>${inline(warning)}</p>`));
@@ -213,7 +218,7 @@ async function buildPlan(runDir, unverified) {
   flush();
   // Replacement is inline XML, preserving the existing grey status paragraph.
   addXml('complete', `<span text-color="gray">${esc(complete)}</span>`, 0);
-  const payload = redact({ version: 1, title, release_id: manifest.release_id, unverified, links, workbook, files, steps, chart_hashes: chartHashes, stats: { charts_inserted: passed.length, charts_total: charts.length, tables_inline: allIds.filter((id) => !isProduct(id)).length, tables_in_workbook: allIds.filter(isProduct).length, estimated_blocks: steps.reduce((sum, step) => sum + step.estimated_blocks, 0) } });
+  const payload = redact({ version: 1, title, release_id: manifest.release_id, report_sha256: reportSha256, input_binding: view.binding, unverified, links, workbook, files, steps, chart_hashes: chartHashes, stats: { charts_inserted: passed.length, charts_total: charts.length, tables_inline: allIds.filter((id) => !isProduct(id)).length, tables_in_workbook: allIds.filter(isProduct).length, estimated_blocks: steps.reduce((sum, step) => sum + step.estimated_blocks, 0) } });
   return { ...payload, digest: sha(JSON.stringify(payload)) };
 }
 
@@ -288,6 +293,29 @@ function materialize(plan, journal, xml) {
   return xml;
 }
 
+async function writeCopy(runDir, path, bytes) {
+  await inputParents(runDir, path);
+  await mkdir(dirname(join(runDir, path)), { recursive: true });
+  const handle = await open(join(runDir, path), constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+  try { await handle.writeFile(bytes); }
+  finally { await handle.close(); }
+}
+
+function planCopies(plan, view) {
+  const copies = new Map([['publish/plan.json', Buffer.from(json(plan))], ['publish/workbook.json', Buffer.from(json(plan.workbook))],
+    ...Object.entries(plan.files).map(([path, xml]) => [path, Buffer.from(xml)])]);
+  const images = new Map();
+  for (const step of plan.steps.filter((entry) => entry.kind === 'image')) {
+    const source = step.argv[step.argv.indexOf('--file') + 1];
+    // Keep source images in place. This dedicated, digest-named directory
+    // contains only planned copies; CLI never opens the live reference image.
+    const path = `charts/.publish-${plan.digest}/${source.slice('charts/'.length)}`;
+    copies.set(path, view.snapshot(source).bytes);
+    images.set(source, path);
+  }
+  return { copies, images };
+}
+
 async function publishImpl(input) {
   for (const token of mcpTokens(input.env ?? process.env)) addSecret(token);
   const options = { ...input, runDir: resolve(input.runDir), outputEnv: input.outputEnv ? resolve(input.outputEnv) : '', unverified: unique(Array.isArray(input.unverified) ? input.unverified : String(input.unverified ?? '').split(',')).map((id) => String(id).trim()).filter(Boolean) };
@@ -299,18 +327,34 @@ async function publishImpl(input) {
   if ((options.retryUncertain || options.skipUncertain) && !options.resume) return { ok: false, target: 'markdown', error: '人工处理不确定步骤需要 --resume' };
   const startedAt = Date.now();
   const report = join(options.runDir, 'report.md');
+  const frozen = await outputBinding(options.runDir, options.outputEnv, input.env ?? process.env);
+  options.outputEnv = frozen.outputEnv;
   let output;
   try { output = await readFile(options.outputEnv, 'utf8'); } catch (error) { if (error.code === 'ENOENT' || !options.outputEnv) return { ok: true, target: 'markdown', feishu: 'disabled', report }; throw error; }
   const config = Object.fromEntries(output.split('\n').map((line) => { const at = line.indexOf('='); return at < 0 ? [] : [line.slice(0, at).trim(), line.slice(at + 1).trim()]; }).filter((parts) => parts.length));
   if (config.feishu !== '1') return { ok: true, target: 'markdown', feishu: 'disabled', report };
+  const frozenLark = frozen.mode !== 'unbound' && config.lark_cli ? await executable(config.lark_cli) : null;
+  if (frozen.mode !== 'unbound' && !frozenLark) return { ok: false, target: 'markdown', report, failed_step: 'cli', error: '已开启飞书输出，但本次收据冻结的 lark_cli 路径缺失或不可执行；请重新 verify 并开始新运行' };
   let savedJournal;
+  try { savedJournal = await optionalJson(join(options.runDir, 'publish/journal.json')); } catch { /* validated below if checks pass */ }
   const fail = (error, fields = {}) => redact({ ok: false, target: 'markdown', error, ...(savedJournal?.doc_url ? { doc_url: savedJournal.doc_url } : {}), ...(savedJournal?.workbook_url ? { workbook_url: savedJournal.workbook_url } : {}), ...fields });
   let checked;
   try { checked = await optionalJson(join(options.runDir, 'check.json')); }
   catch { return fail('机械校验未通过，不发布到飞书：check.json 无法读取或已损坏', { failed_step: 'check', resume: command(options, true) }); }
-  if (checked?.ok !== true) return fail('机械校验未通过，不发布到飞书');
+  let snapshot;
+  try { snapshot = await reportSnapshot(report); }
+  catch (error) { return fail(`机械校验未通过，不发布到飞书：正文无法读取；${error.message}`, { failed_step: 'check', resume: command(options, true) }); }
+  let view;
+  try { view = await captureInputs(options.runDir, { reportSnapshot: snapshot }); }
+  catch (error) { return fail(`机械校验未通过，不发布到飞书：输入不可用；${error.message}`, { failed_step: 'check', resume: command(options, true) }); }
+  const binding = checkBinding(checked, snapshot.sha256, view.binding);
+  if (!binding.available || checked.ok !== true) return fail(`机械校验未通过，不发布到飞书${binding.available ? '' : `：${binding.reason}`}`, { failed_step: 'check', resume: command(options, true) });
   let plan;
-  try { plan = await buildPlan(options.runDir, options.unverified); } catch (error) { return fail(error.message, { failed_step: 'plan', resume: command(options, true) }); }
+  try {
+    if (!snapshot.bytes.equals(Buffer.from(redact(renderReport(view)), 'utf8'))) throw new Error('正文与校验输入的组装结果不一致，请重新 assemble / check');
+    plan = buildPlan(view, options.unverified, snapshot.sha256);
+    await view.assertUnchanged();
+  } catch (error) { return fail(error.message, { failed_step: 'plan', resume: command(options, true) }); }
   await mkdir(join(options.runDir, 'publish'), { recursive: true });
   const journalPath = join(options.runDir, 'publish/journal.json');
   let journal;
@@ -319,9 +363,16 @@ async function publishImpl(input) {
   savedJournal = journal;
   if (journal && journal.plan_digest !== plan.digest) return fail('发布计划摘要与上次不一致，拒绝续跑；请核对已有个人文档与附表', { failed_step: 'plan', doc_url: journal.doc_url, workbook_url: journal.workbook_url, resume: command(options, true) });
   if (journal && !options.resume && !options.dryRun) return fail('已有发布日志；为避免重复创建，请用 --resume 续跑', { doc_url: journal.doc_url, workbook_url: journal.workbook_url, failed_step: 'journal', resume: command(options, true) });
-  await atomicJson(join(options.runDir, 'publish/plan.json'), plan);
-  await writeArtifact(options.runDir, 'publish/workbook.json', json(plan.workbook));
-  for (const [path, xml] of Object.entries(plan.files)) await writeArtifact(options.runDir, path, xml);
+  const { copies, images } = planCopies(plan, view);
+  const assertMaterials = async () => {
+    await boundOutput(options.runDir, options.outputEnv, input.env ?? process.env);
+    await view.assertUnchanged();
+    for (const [path, bytes] of copies) await assertInputCopy(options.runDir, path, sha(bytes));
+  };
+  // A resumed operation verifies immutable plan copies rather than overwriting
+  // possibly altered files and erasing the evidence of a version change.
+  if (!journal) for (const [path, bytes] of copies) await writeCopy(options.runDir, path, bytes);
+  await assertMaterials();
   if (options.dryRun) return { ok: true, target: 'feishu', dry_run: true, plan: join(options.runDir, 'publish/plan.json'), steps: plan.steps.map(({ number, kind, argv, estimated_blocks, chars, conditional }) => ({ number, kind, argv, estimated_blocks, ...(chars !== undefined ? { chars } : {}), ...(conditional ? { conditional } : {}) })), estimated_blocks: plan.stats.estimated_blocks, ...plan.stats };
   journal ??= { version: 1, plan_digest: plan.digest, document_id: null, doc_url: null, workbook_token: null, workbook_url: null, sheet_ids: {}, completed: [] };
   savedJournal = journal;
@@ -348,12 +399,14 @@ async function publishImpl(input) {
     // Explicit retry keeps pending until the retried call is durably completed.
   }
   const env = input.env ?? process.env;
-  const lark = (env.LARK_CLI ? await fromPath(env.LARK_CLI, env) : null) ?? (config.lark_cli ? await executable(config.lark_cli) : null) ?? await fromPath('lark-cli', env);
+  const lark = frozen.mode !== 'unbound' ? frozenLark : (env.LARK_CLI ? await fromPath(env.LARK_CLI, env) : null) ?? (config.lark_cli ? await executable(config.lark_cli) : null) ?? await fromPath('lark-cli', env);
   if (!lark) return fail(`已开启飞书输出，但找不到 lark-cli；请安装并登录 lark-cli 后重试：${command(options, !!journal)}`, { failed_step: 'cli', resume: command(options, true) });
+  await assertMaterials();
   const version = await call(lark, ['--version'], options.runDir, env), match = version.stdout?.match(/(\d+)\.(\d+)\.(\d+)/u);
   if (version.code !== 0 || !match) return fail('无法读取 lark-cli 版本；请运行 lark-cli update 后重试', { failed_step: 'version', resume: command(options, true) });
   const parts = match.slice(1).map(Number);
   if (parts[0] < 1 || (parts[0] === 1 && parts[1] === 0 && parts[2] < 81)) return fail('lark-cli 版本低于 1.0.81；请运行 lark-cli update 后重试', { failed_step: 'version', resume: command(options, true) });
+  await assertMaterials();
   const auth = await call(lark, ['auth', 'status', '--json'], options.runDir, env);
   // lark-cli 1.0.81 的 auth status 不是 API 信封：顶层没有 ok 字段，只有显式 ok:false 才算失败（2026-09-30 真机核实）。
   // 用户访问令牌约两小时过期；刷新令牌仍有效时 status 与 tokenStatus 都报 needs_refresh（2026-09-30 真机核实），
@@ -364,6 +417,7 @@ async function publishImpl(input) {
   if (auth.code !== 0 || !auth.json || auth.json.ok === false || !ready || !valid) return fail(`飞书用户身份未就绪或令牌失效且无法刷新；请用户自行执行 ${login(REQUIRED_SCOPES)}`, { failed_step: 'auth', resume: command(options, true) });
   const scopes = scopeList(user.scope), missing = REQUIRED_SCOPES.filter((scope) => !scopes.includes(scope));
   if (missing.length) return fail(`飞书权限不足；请用户自行执行 ${login(missing)}`, { failed_step: 'auth', resume: command(options, true) });
+  await assertMaterials();
   await atomicJson(journalPath, journal);
   let lastWrite = Number.isFinite(journal.last_write_at) ? journal.last_write_at : 0;
   let executed = 0;
@@ -380,15 +434,25 @@ async function publishImpl(input) {
         throw new Error(`第 ${step.number} 步结果不确定，可能已写入，请打开文档核对；日志已有资源 id，禁止再次创建，请人工核对后使用 --skip-uncertain`);
       }
       if (step.kind === 'workbook_info' && Object.values(plan.links).every((name) => journal.sheet_ids[name])) { journal.completed.push(step.number); await atomicJson(journalPath, journal); continue; }
-      const argv = step.argv.map((arg) => arg === '__DOCUMENT_ID__' ? journal.document_id : arg === '__WORKBOOK_TOKEN__' ? journal.workbook_token : arg);
+      const argv = step.argv.map((arg) => arg === '__DOCUMENT_ID__' ? journal.document_id : arg === '__WORKBOOK_TOKEN__' ? journal.workbook_token : images.get(arg) ?? arg);
       if (argv.some((arg) => arg === null || arg === undefined)) throw new Error('发布日志缺少当前步骤需要的资源 id');
-      if (step.content_file) await writeArtifact(options.runDir, step.content_file, materialize(plan, journal, plan.files[step.content_file]));
+      let execution;
+      if (step.content_file) {
+        const path = `publish/execute/${step.content_file.slice('publish/'.length)}`;
+        const bytes = Buffer.from(redact(materialize(plan, journal, plan.files[step.content_file])));
+        await writeCopy(options.runDir, path, bytes);
+        argv[argv.indexOf(`@${step.content_file}`)] = `@${path}`;
+        execution = { path, sha256: sha(bytes) };
+      }
       if (step.write) {
         const delay = 400 - (Date.now() - lastWrite);
         if (delay > 0) await new Promise((done) => setTimeout(done, delay));
+        await assertMaterials();
         journal.pending = { step: step.number, started_at: new Date().toISOString() };
         await atomicJson(journalPath, journal);
       }
+      await assertMaterials();
+      if (execution) await assertInputCopy(options.runDir, execution.path, execution.sha256);
       const result = await call(lark, argv, options.runDir, env);
       if (step.write) {
         lastWrite = Date.now(); journal.last_write_at = lastWrite;
@@ -411,7 +475,8 @@ async function publishImpl(input) {
       await atomicJson(journalPath, journal);
     } catch (error) { return fail(error.message, { doc_url: journal.doc_url ?? undefined, workbook_url: journal.workbook_url ?? undefined, failed_step: String(step.number), resume: command(options, true) }); }
   }
-  const result = { ok: true, target: 'feishu', doc_url: journal.doc_url, workbook_url: journal.workbook_url, charts_inserted: plan.stats.charts_inserted, tables_inline: plan.stats.tables_inline, tables_in_workbook: plan.stats.tables_in_workbook };
+  const result = { ok: true, target: 'feishu', report_sha256: plan.report_sha256, input_binding: plan.input_binding, plan_digest: plan.digest,
+    doc_url: journal.doc_url, workbook_url: journal.workbook_url, charts_inserted: plan.stats.charts_inserted, tables_inline: plan.stats.tables_inline, tables_in_workbook: plan.stats.tables_in_workbook };
   await atomicJson(join(options.runDir, 'publish.json'), result);
   return redact(result);
 }

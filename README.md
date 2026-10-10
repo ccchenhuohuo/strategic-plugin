@@ -1,95 +1,54 @@
 # strategic-analytics
 
-当前正式版：**0.3.1**（季报输出方式改为下拉选择、飞书发布续跑防重复） · [正式发行版](https://github.com/ccchenhuohuo/strategic-plugin/releases/tag/v0.3.1) · [更新记录](CHANGELOG.md)
+战略大盘分析插件的 **0.3 系列**：从月度查询扩展到窗口比较、服务端增长分解、商品竞争与证据驱动季报。
+以同一份 Skill、标准 MCP 与脚本引擎接入 Codex / Claude Code / WorkBuddy，装好后可用自然语言分析市场趋势、金额份额、品牌格局、价格带与商品轨迹。
 
-Codex / Claude Code 插件：用受治理的只读 MCP 做大盘市场分析——趋势、份额、增长与贡献、排名与变化榜、
-价格带、品牌集中度与单品牌多月序列、标准类目与平台原始类目导航、单 SKU 搜索与逐月轨迹。
-
-装好之后直接用自然语言提问即可，例如：
+**当前正式版：[0.3.2](https://github.com/ccchenhuohuo/strategic-plugin/releases/tag/v0.3.2)，2026-10-10 发布。**
+共用季报入口、Codex setup 与通用配对绑定、本地固定收录和飞书同步开关均包含在本版。
+从 0.2.x 升级可以一次获得 0.3 系列能力，无需依次安装 0.3.0 / 0.3.1；真实版本历史保留在 [CHANGELOG](CHANGELOG.md)。
 
 > 最近三个月大盘整体表现怎么样？
-> 2026-05 Amazon US 的品牌集中度如何，CR5 是多少？
-> 搜一下 Amazon US 卖得最好的三脚架，看它今年以来的价格走势。
+> Amazon US 最近完整月的金额份额与品牌集中度如何？
+> 看支架类当期窗口的 Top 商品，以及商品身份池的延续、新进和退出。
 
-战略组季报（0.3.0 起，仅 Claude Code）：`/strategic-analytics:quarterly-report current_start=2026-01 current_end=2026-04 label=26Q1`，
-按固定骨架取数、分章写市场洞察并做数字溯源校验；只写战略洞察，不写经营建议。
+## 从 0.2 到 0.3 的能力提升
 
-季报默认输出 Markdown。需要飞书云文档时，在交互式 `claude` 终端执行
-`/plugin configure strategic-analytics@strategic`，把「季报输出方式」选为「飞书云文档」，新开会话后生效。已装 0.3.0 的用户更新后也需重新选择一次输出方式。
-机械校验通过后会在运行者的飞书个人空间根目录生成文档与同名附表，不共享；分享前请人工审阅。
-正文包含叙述、图表、分析表与品牌表，商品下钻明细和证据账本放附表，正文链接到对应子表。
+| 能力 | 0.2 系列 | 0.3 系列 |
+|---|---|---|
+| 受治理工具 | 12 个只读工具 | 14 个，新增 `strategic_product_rank`、`strategic_industry`；统一 `strategic_` 前缀 |
+| 时间比较 | 单月、月度趋势、两期比较 | 最长 12 个连续完整月的窗口；整窗同比、相邻等长环比，至多两个对照；先汇总再计算 |
+| 增长与均价 | 增长、增量与贡献 | 服务端 Shapley 销量/结构/均价分解，以及均价的价格/结构拆分；贡献与分解不写成因果 |
+| 类目与分段 | 品牌/价格带已有完整父路径 | SKU 明细也支持完整 L1/L2/L3；路径并集与不重叠分段比较，旧代次缺粒度明确拒绝 |
+| 品牌竞争 | 单月格局、集中度、单品牌序列 | 窗口排名、金额份额 pp、名次变化与公司品牌保留行；逐月 × 全品牌面板仍不提供 |
+| 商品 | 单 SKU 搜索与逐月轨迹 | 细分范围/品牌 Top 商品及链接，商品身份池变化、同商品单位价值指数；身份不是 SPU，榜单是截断集合 |
+| 外部行业背景 | 电商匹配子集估算 | CIPA 相机出货、信通院国内手机出货独立链；只并列看方向，不与电商相除、混算或解释因果 |
+| 季报 | 自由组织分析 | 固定骨架、证据账本、分章洞察、后写执行摘要、图表版面门禁、数字溯源与语义核查；只写洞察 |
+| 报告产物 | 查询结果与分析叙述 | 本地 Markdown 与可选飞书文档/附表；0.3.2 固定收录、索引与历史版本 |
+| 宿主执行方式 | 分析 Skill + MCP | 0.3.2 共用季报 Skill 与角色参考，顺序执行或委派；Claude Workflow 是可选优化，WorkBuddy 按官方规范提供引导 |
 
-飞书输出需要本机已安装并登录 **lark-cli ≥ 1.0.81**，使用用户身份；所需权限包括
-`docx:document:create`、`docx:document`、`docs:document.media:upload`、`sheets:spreadsheet:create`、
-`sheets:spreadsheet:write_only`。未登录、令牌失效或缺权限时脚本报错并给出用户自行执行的登录授权命令；
-lark-cli 被卸载、找不到或发布失败时保留 Markdown。选择 Markdown 时不会调用 lark-cli。
-发布每段默认运行 400 秒；正常分段可自动续跑，日志中留有待确认写入时会停止并给出已有链接，需人工打开文档与附表核对。
-人工核对后可用 `--resume --skip-uncertain` 确认已写入后继续，或 `--resume --retry-uncertain` 重做该步；已有资源 id 时不会再次创建。
-
-图表需要 **Python 3.12/3.13** 与中文字体。首次出图自动在插件数据目录创建环境，下载约 25 MB 的固定版本依赖；
-可以设置 `STRATEGIC_PIP_INDEX_URL` 指定包源，也可以用 `STRATEGIC_CHART_PYTHON` 指向符合锁定版本的解释器。
-版面检测检查文字与气泡、文字与文字、参考线与引线等碰撞；没有可用环境或全部布局策略未通过时跳过相应图，报告继续生成。
-Markdown 与飞书使用同一批 PNG；报告引用的图片缺失会阻断机械校验。
-
-所有可见数字由服务端计算并携带复现戳（`release_id` + 参数回显）。当前合法发布链上的 release 可按相同参数复现聚合结果；可绑定列表见 `strategic_data_status`。
-晚到兄弟节点、冲突或失活可能使旧 release 不再可绑定。SKU 明细只保留发布链最近 3 个 release 的在线切片，归档后明确披露。
-
-## 安装前准备
-
-| 依赖 | 说明 |
-|---|---|
-| 客户端 | Codex 或 Claude Code，需支持插件；季报输出下拉选择要求 **Claude Code ≥ 2.1.271**（支持 `userConfig.options`）；0.3.0 源码的兼容性验证使用 Codex CLI 0.155.0-alpha.9.2、Claude Code 2.1.281 |
-| 访问令牌 | 向插件维护者申请。Claude Code 在插件配置框里填写（存系统钥匙串）；Codex 读环境变量 `STRATEGIC_MCP_TOKEN` |
-| 网络 | 能访问 MCP 端点（默认 `https://voc.ulanzi.com:28081`） |
-
-**Claude Code 用户不需要设置环境变量**，令牌在安装时填写，见下文「安装：Claude Code」。
-
-以下环境变量只用于 **Codex**（以及不经插件配置、直接运行季报脚本的场景）。
-在 shell 配置（如 `~/.zshrc`）中加入下面一行，替换令牌占位符，**新开一个终端**后从该终端启动客户端：
-
-```bash
-export STRATEGIC_MCP_TOKEN="你的令牌"
-```
-
-令牌只放在本机环境变量中，不写进插件、仓库或 `config.toml`。可以用
-`test -n "$STRATEGIC_MCP_TOKEN" && echo "令牌已设置"` 检查当前终端是否设置了变量，不打印令牌。
-
-**桌面端 / IDE 注意**：从 Dock、开始菜单或 IDE 启动的进程不一定继承终端环境；只改 `.zshrc`
-并重启应用未必生效。macOS 可在已加载令牌的终端中执行以下命令，再完全退出并重新打开客户端：
-
-```bash
-launchctl setenv STRATEGIC_MCP_TOKEN "$STRATEGIC_MCP_TOKEN"
-```
-
-该设置需在注销或重启系统后重新执行。Windows 请把 `STRATEGIC_MCP_TOKEN` 配为用户环境变量，
-并重启客户端及启动它的 IDE。CLI 用户直接从已设置变量的终端运行 `codex` 或 `claude`。
-
-## 安装：Claude Code
-
-在 Claude Code 会话里依次执行两条命令：
-
-```
-/plugin marketplace add ccchenhuohuo/strategic-plugin
-```
-
-```
-/plugin install strategic-analytics@strategic
-```
-
-安装时会弹出配置框：填入访问令牌，服务地址保持默认。按提示确认后重启 Claude Code。
-
-- 令牌存进系统安全存储（macOS 钥匙串），不写进 `settings.json`，也不需要环境变量。
-- 配置框没有弹出（例如从 shell 用 `claude plugin install` 安装），或以后要换令牌：在交互式 `claude` 会话里执行
-  `/plugin configure strategic-analytics@strategic`，然后新开会话。桌面端没有配置入口时，在终端运行一次 `claude` 做这一步即可，
-  配置与桌面端共用。
-- 季报脚本经 Bash 直连服务、读不到插件配置，所以每次会话启动时插件会把服务地址与令牌写进
-  `~/.claude/plugins/data/strategic-analytics-strategic/connection.env`（仅本人可读；卸载插件时随数据目录删除），脚本从这里取用。
-- 同一会话钩子还把季报输出方式和本机 lark-cli 路径写进数据目录的 `output.env`（0600）；不调用 lark-cli、不联网。
-  检测到 CLI 而输出方式未选飞书云文档时只提示一次；更改输出方式或安装 CLI 后新开会话。
+全部数字由受治理服务计算；电商金额/件数为估算，保留响应口径、缺失状态与复现戳。
+NULL、无观察、未分类、越过水位、检疫与切片归档各有各的含义，不能补零或互相替代。
 
 ## 安装：Codex
 
-在已设置 `STRATEGIC_MCP_TOKEN` 的终端执行：
+需支持插件的 Codex CLI；本地适配以 **0.159.2** 实测原生安装、skills discovery 与 hooks 隔离。
+Node.js ≥ 18 用于季报脚本；原生季报绑定另需本机可执行的 Codex CLI（读取本地 MCP 配置）。访问令牌向维护者申请，客户端进程需继承 `STRATEGIC_MCP_TOKEN`。
+不要把令牌发到对话里、写进插件、本地偏好或 config.toml，也不要打印它。
+
+CLI 从已配置环境的终端启动。在 zsh 中可交互输入而不回显（当前终端有效）：
+
+```zsh
+read -rs 'STRATEGIC_MCP_TOKEN?访问令牌（输入不回显）：'
+export STRATEGIC_MCP_TOKEN
+```
+
+可用 `test -n "$STRATEGIC_MCP_TOKEN" && echo "令牌变量已设置"` 检查设置状态。
+这不证明认证成功；以实际 `strategic_data_status` 调用为准。
+桌面/IDE 启动的进程可能不继承终端环境；只改 shell 配置、重启窗口也未必生效。
+通过你管理的安全启动环境向客户端进程提供同名变量，再完全退出并启动、新建会话；setup Skill 可帮助检查当前进程的状态。
+本地偏好只管报告目录与同步，不能替代认证；Codex 不执行 Claude userConfig，也不使用 Claude 钥匙串或连接钩子。
+
+安装 **0.3.2**：
 
 ```bash
 codex plugin marketplace add ccchenhuohuo/strategic-plugin
@@ -97,40 +56,191 @@ codex plugin add strategic-analytics@strategic
 codex mcp get strategic --json
 ```
 
-输出的 `transport.bearer_token_env_var` 应为 `STRATEGIC_MCP_TOKEN`，然后完全重启 Codex 并新建会话。
-Codex 清单只能指定一个令牌变量，**必须改设新变量**；旧变量回退只适用于季报脚本，不适用于 Codex 插件 MCP。
-插件内已声明认证，不需要另外添加同名的用户级 MCP。两端共享 Skill 和同一个服务端。
+应看到唯一 `strategic` MCP、`transport.bearer_token_env_var` 为 `STRATEGIC_MCP_TOKEN`，默认地址
+`https://voc.ulanzi.com:28081/flywheel/mcp`。不要额外添加同名用户级 MCP；已有手工覆盖时先
+`codex mcp remove strategic`，再核对插件连接。
 
-仅直接接入 MCP 时，也可以使用用户级配置：
+### 原生季报与设置
+
+需要从本地完整包安装时，可以在独立 CODEX_HOME 下登记该目录，再安装：
 
 ```bash
-codex mcp add strategic \
-  --url https://voc.ulanzi.com:28081/flywheel/mcp \
-  --bearer-token-env-var STRATEGIC_MCP_TOKEN
+codex plugin marketplace add "/绝对路径/strategic-plugin"
+codex plugin add strategic-analytics@strategic
 ```
 
-改用插件接入后执行 `codex mcp remove strategic` 移除用户级覆盖，再用 `codex mcp get strategic --json` 验证插件清单。
+新会话用 `$strategic-analytics:strategic-setup` 验证连接、调整报告目录或同步偏好。
+CLI 实测会发现 `strategic-analytics:strategic-analytics`、`strategic-analytics:quarterly-report`、
+`strategic-analytics:strategic-setup` 三个 Skill，setup 已被识别为 onboardingSkill；桌面安装后 setup 按钮及交互仍待独立 UI 验收。
 
-## 从 0.2.x（flywheel-analytics）迁移
+生成时用 `$strategic-analytics:quarterly-report` 并说明实际月份，例如“生成 26Q1 季报，当期 2026-01 至 2026-03”。
+三端共用 `skills/quarterly-report/SKILL.md`，从实际加载路径找到同一脚本和角色参考，按固定骨架取数、分章写作、语义核查与有限修订，最后写执行摘要，再组装和机械校验。图表在取数后执行，组装前结束。
+有协作能力可委派，没有则按相同角色指导顺序执行。写手只读服务端摘要，正文数字原样引用 `*_display`，不计算业务数字。
 
-0.3.0 将插件改为 `strategic-analytics`、市场和 MCP 登记名改为 `strategic`，14 个工具统一使用 `strategic_` 前缀。
-旧工具名不提供别名，插件和服务端须同时更新。GitHub 新仓库为 `ccchenhuohuo/strategic-plugin`，旧地址由 GitHub 自动跳转；
-服务网关地址仍为 `https://voc.ulanzi.com:28081/flywheel/mcp`。旧安装不靠普通更新跨名迁移，需卸载并重装。
+本地 helper 可单独使用；下例路径从已加载 setup Skill 解析获得，不要猜安装版本，也不要把项目 cwd 当成包根：
 
-Claude Code：在交互式 `claude` 会话里依次执行以下命令。0.3.0 的访问令牌改存插件配置，需要重新填写。
-
+```bash
+node "/实际包根/skills/quarterly-report/scripts/codex.mjs" show
+node "/实际包根/skills/quarterly-report/scripts/codex.mjs" configure --report-dir "~/Documents/战略季报" --feishu-output false
+node "/实际包根/skills/quarterly-report/scripts/codex.mjs" verify
 ```
-/plugin uninstall flywheel-analytics@flywheel
-/plugin marketplace remove flywheel
+
+只变更指定键，遗漏键保留；中文空格、~ 与绝对路径均可，相对路径/非法值报错且保留旧偏好。
+默认同步关闭。偏好位于 `<CODEX_HOME 或 ~/.codex>/plugins/data/strategic-analytics-strategic/preferences.json`，
+只存 `report_dir`、`feishu_output`；show/configure 准备 `runs/`、`chart-env/` 和偏好输出，
+只发现 lark-cli，不运行它、不联网、不存令牌。报告目录仅收录时创建。验证可用 `--data-dir` 指向临时目录。
+
+每次报告先 verify：它只执行本地 `codex mcp get strategic --json`，捕获并白名单解析当前实际选择的端点与认证声明，
+不调用 MCP/模型，也不回显原始配置、headers 或凭据。仅接受已启用 HTTP 服务和 `STRATEGIC_MCP_TOKEN` bearer 认证；
+缺 CLI、配置损坏或认证方式不符就停止。URL 含认证或可疑秘密拒绝保存；已设 `STRATEGIC_MCP_URL` 必须与实际端点一致，
+不一致在任何请求前拒绝。旧 FLYWHEEL 族和 Claude 配置不参与，也不猜默认服务。
+
+verify 返回非敏感 `codex_binding` 收据及冻结的 `output_env`，prepare 必须传 `--codex --codex-binding <收据路径>`，
+再核对当前配置。后续发布/收录只使用本次冻结输出；另一会话 configure 只影响后续报告。绑定或冻结输出被修改时拒绝续跑，
+不复用旧证据。verify 通过仅证明本地配置，服务连接仍以原生 `strategic_data_status` 调用为准。
+持久化同步开关表示用户生成报告时额外同步的意图，配置本身不会发布，无需每次重复审批；用户取消或要求本次不发布时停止同步。
+
+Codex 清单逐目录明确选取共同 `skills/strategic-analytics/`、`skills/quarterly-report/` 与薄设置入口 `codex/skills/strategic-setup/`，通过显式空 hooks 文件关闭 Claude hooks 的默认发现。
+CLI 0.159.2 中 `hooks: []` 未能关闭默认发现，因此使用 `hooks: "./codex/hooks.json"`，真实 app-server 检查 hooks 为空。
+不要求 Codex 用户执行 Claude 配置命令或 Workflow。
+
+## 安装：Claude Code
+
+```text
 /plugin marketplace add ccchenhuohuo/strategic-plugin
 /plugin install strategic-analytics@strategic
-/plugin configure strategic-analytics@strategic
 ```
 
-在配置框填写访问令牌，服务地址保持默认；需要飞书季报时把「季报输出方式」选为「飞书云文档」，然后新开会话。
-连接文件改在 `~/.claude/plugins/data/strategic-analytics-strategic/connection.env`，旧插件数据随卸载删除。
+安装配置框填入访问令牌，服务地址保持默认；令牌存系统安全存储，不需要环境变量。
+没有配置框或需换令牌时，在交互式 claude 中执行 `/plugin configure strategic-analytics@strategic`，然后新开会话。
+本轮使用真实 **Claude Code 2.1.293** 验证临时安装、会话配置和钩子；没有修改真实设置或钥匙串。
+本轮验收未执行 Claude 模型季报；安装和配置检查不代表模型执行通过。
 
-Codex：在终端先卸载旧插件、删除旧市场，并清理可能残留的用户级 `flywheel` MCP 临时配置，再添加新市场、安装并配置令牌。
+Claude 季报入口：
+
+```text
+/strategic-analytics:quarterly-report current_start=2026-01 current_end=2026-03 label=26Q1
+```
+
+默认遵循共同 Skill 的脚本流程；宿主实际提供 Workflow API 时，现有 Workflow 与四个同源兼容 Agent 可作为取数、写作、核查和收尾的优化入口。
+0.3.1 保留其当时的输出配置；0.3.2 使用默认关闭的「同步飞书云文档报告」与「本地报告目录」，
+在交互式 claude 的 `/config` 调整后新开会话。使用者安装最终 0.3 包时一次配置即可；内部迭代细节保留在 CHANGELOG。
+`hooks/connection.sh` 把配对的地址与令牌写到 Claude 插件数据目录的 connection.env（0600）；
+`hooks/output.sh` 写 feishu、lark_cli、report_dir 到 output.env（0600），只检测 CLI。
+
+## 安装：WorkBuddy 与普通 MCP + Skill 接入
+
+WorkBuddy 首选导入同一个插件地址 **ccchenhuohuo/strategic-plugin**（或其本地完整包），使用既有
+`.claude-plugin/`、`.mcp.json` 和根目录 `skills/`，不增加第三份 manifest。宿主支持的插件管理入口、配置框和
+安全凭据存储以实际版本为准；安装后新会话用“生成 26Q1 季报，当期 2026-01 至 2026-03”触发共同 Skill。
+[CodeBuddy 插件参考](https://www.codebuddy.cn/docs/cli/plugins-reference)说明 .claude-plugin、userConfig 与插件路径变量兼容，
+没有说明本项目 Workflow API。[WorkBuddy 连接器市场](https://open.workbuddy.cn/en/docs/connector)是另一种格式，不能据此判定插件目录支持。
+本轮 WorkBuddy 验收范围为官方规范核对与接入引导，未安装或实际执行其桌面客户端；CodeBuddy CLI 或合成测试不等于桌面实测。
+WorkBuddy 的插件管理与添加第三方市场入口参见[官方插件介绍](https://www.workbuddy.cn/docs/workbuddy/Plugins)。
+
+按官方界面路径操作：
+
+1. 左侧进入「插件」，点击「+」添加第三方市场，地址填 `https://github.com/ccchenhuohuo/strategic-plugin`。
+2. 在该市场选择 `strategic-analytics` 安装、启用；通过宿主配置入口填写维护者提供的访问令牌、服务地址和输出偏好。
+3. 新开会话，先检查共同分析 Skill 与 strategic MCP 可用，再用自然语言请求带实际月份的季报。若该版本无法加载整包，按下面的 MCP + Skill 路径接入。
+
+宿主没有插件入口时：保留完整安装包（含 Skill、references、scripts、config），用客户端原生方式配置一个名为 strategic 的
+HTTP MCP，地址取实际授权端点，Bearer 凭据用该客户端支持的安全配置或环境引用；不要在配置示例或对话里粘贴令牌。
+显式加载包内 `skills/strategic-analytics/SKILL.md` 和 `skills/quarterly-report/SKILL.md`。
+自由战略分析由宿主主 Agent 按分析 Skill 选择 MCP；季报才依次使用 writer/summary/verifier 角色。
+支持会话钩子时，启动提示 `STRATEGIC_PLUGIN_DATA_DIR=...` 给出连接文件所在的真实资料目录；同一钩子兼容 CodeBuddy 的原生命名别名。
+提示不包含令牌或服务地址，没有该提示时按下面的显式资料目录与成对启动环境接入，不猜安装缓存或借用其他客户端配置。
+有协作者可以委派，没有就按相同角色参考顺序完成，并注明是同会话自查。无需新的 Agent runtime 或服务器。
+
+通用 setup 只管偏好、路径、成对连接和冻结输出。下面路径必须从实际加载的 Skill 定位，data-dir 显式选本宿主目录：
+
+```bash
+node "/实际包根/skills/quarterly-report/scripts/setup.mjs" configure --host workbuddy --data-dir "/本宿主数据目录" --report-dir "~/Documents/战略季报" --feishu-output false
+node "/实际包根/skills/quarterly-report/scripts/setup.mjs" verify --host workbuddy --data-dir "/本宿主数据目录" --connection "/本宿主数据目录/connection.env" --output-env "/本宿主数据目录/output.env"
+```
+
+有钩子时直接运行上述 verify 即可，不必先运行 configure；配置框写出的 output.env 是本次输出偏好的来源。
+connection.env/output.env 必须来自本宿主本次会话，均为本人 0600 普通文件；前者只含 url/token，后者只含
+feishu/lark_cli/report_dir。脚本不打印或再持久化明文令牌，通用收据只记来源、摘要和输出偏好。
+没有钩子时，不传上述两文件；由安全启动环境成对提供 STRATEGIC_MCP_URL + STRATEGIC_MCP_TOKEN，helper 不猜默认地址、
+不混配新旧变量、不读另一客户端配置。HTTPS 端点拒绝认证信息、查询、片段及可疑秘密；HTTP 仅限本机回环测试。
+CodeBuddy 仅在 helper 的 `--host codebuddy` 作为 workbuddy 别名；Codex 继续用 codex.mjs 的严格实际 CLI/bearer 校验。
+
+通用 verify 的结果只能称**配对连接已验证**（host_mcp_config_verified=false），不能称宿主当前 MCP 配置已验证或服务已连通。
+Codex verify 才核对其实际当前配置。两者都需通过本宿主实际 strategic_data_status 验证服务、水位和认证。
+verify 返回 portable_binding 与冻结 output_env、runs_dir、chart_env、config；通用 prepare 显式传
+`--portable-binding <返回收据>` 和 `--runs-dir <返回目录>`，以后只用本次冻结 output_env 发布/收录。
+另一会话改偏好不影响进行中的报告；续跑核对原成对连接、来源、凭据摘要、收据与原运行身份，变化就停止。
+冻结输出损坏或指定其他路径拒绝发布/收录；失去网络或令牌仍可用完好的冻结收据离线收录已有草稿。
+同路径导入不会重写钩子的现行 output.env；本次冻结值直接来自已验证的导入快照。
+
+运行依赖统一：季报需 Node.js ≥ 18 和读写文件/执行脚本的宿主能力；图表 Python 与飞书 lark-cli 都可选。
+未绘图、未独立核查、未同步各自披露，固定阶段只约束控制顺序，洞察正文由模型写作与语义核查完成。
+项目指引使用工作台识别的 AGENTS.md 或 CLAUDE.md 文件名，加入相同加载指令即可：市场分析先读取实际安装包的 `skills/strategic-analytics/SKILL.md`；季报再读取 `skills/quarterly-report/SKILL.md` 并依其引用找到角色和脚本。
+安装路径从当前已加载 Skill 的真实位置取得；宿主不自动加载时显式读取。完整规则仍共用 Skill，不复制成几套项目规则，也不宣称单数 agent.md 在各客户端自动加载。
+
+## 季报产物与收录
+
+本地 Markdown 始终生成。图表来自同一份证据，Python 3.12/3.13 与中文字体可用时执行，
+首次托管环境会下载约 25 MB 锁定依赖；可设 `STRATEGIC_PIP_INDEX_URL` 或 `STRATEGIC_CHART_PYTHON`。
+版面门禁不过或环境不可用时跳过相应图并记录警告，已引用图片缺失会阻断机械校验。
+
+报告与实际引用图表收录到 report_dir，缺省 `~/Documents/战略季报`：
+
+```text
+战略季报/
+  索引.md
+  .index.json
+  26Q1/
+    CMI 全球市场洞察 - 26Q1.md
+    charts/
+    .report.json
+    历史/2026-10-08 09-30/
+```
+
+校验阻断、飞书关闭/跳过/失败时也收录，索引标注结果。相同 run_dir 幂等覆盖，同一标签新运行归档上一版，
+机械校验的组装比对、数字和表达检查消费同一次捕获的草稿、摘要、表格、证据等输入；表格 JSON 与 Markdown 必须同源一致，直接修改正文也会阻断。校验不改写正文。
+check.json 的正文 SHA-256 和逐文件输入版本绑定必须匹配实际收录材料；缺绑定、错版本、摘要不符或结构损坏时仍保留草稿，索引明确标为「未验证（校验不可用）」。
+飞书成功记录也绑定正文、输入和计划；只有当前稿匹配才标为已同步。改稿后旧云端链接保留并注明本稿未同步，缺绑定的旧记录标为同步归属未验证；收录过渡时也不沿用旧同步标记。
+用户自放文件保留。证据、摘要、草稿、校验、图表规格与发布日志留在各客户端数据目录的 runs 下；
+显式 out 只改变工作目录。收录失败指出原稿位置，不删除原报告。所有报告均为草稿，分享前人工审阅。
+移动/替换前先写本地恢复记录，普通 I/O 错误后重试先恢复上一笔操作，确保旧索引仍对应旧正文；
+归档后先把两份索引的旧行转到历史路径，再安装新版，失败等待重试时可暂缺链接，但可读链接不会错指另一代正文。
+同 run 更新也在替换正文前先撤销两份索引的旧通过与旧摘要，标为「未验证（收录进行中）」；恢复后提交新稿状态，最终不新增历史。
+记录的阶段、目标清单、索引期望或路径无法验证时返回失败，不扫描目录猜当前版本，不自动清除不明锁。
+从第一次组装开始，check/修订/发布异常也尝试收录已有草稿；原异常与收录结果分别回报，收录成功不能把校验失败改为成功。
+只释放本进程持有、inode/device 相同的空锁。短暂 EIO 最多尝试三次；持续失败返回 ok=false、锁位置、
+collection_completed 与人工恢复说明。确认没有收录进程后，仅对确认遗留的空锁目录手动 rmdir，再重试；其他锁或含文件的目录先人工核对。
+
+飞书是额外同步，需本机已安装并以用户身份登录 **lark-cli ≥ 1.0.81**。
+所需权限为 `docx:document:create`、`docx:document`、`docs:document.media:upload`、
+`sheets:spreadsheet:create`、`sheets:spreadsheet:write_only`，实际缺权以发布脚本报错为准。
+只有最终机械校验通过且本次同步开启时才发布；持久化开关表达额外同步意图，用户取消后不继续发布。图文与同名附表建在个人空间，不共享。
+正文或必需输入不存在、不可读、版本变化或与通过结果不匹配时，在调用 CLI 前拒绝发布；修改或重新组装后须重新 check。
+发布从同一输入视图生成计划和登记副本，XML、附表与上传图片核对副本摘要；写入前或续跑发现源输入/副本变化就停止，保留 pending 与已有链接。
+关闭同步不调用 CLI。发布失败保留 Markdown，已有链接如实回报。
+每段默认 400 秒，正常 incomplete 分段可有限续跑；pending 结果不确定时停止，不能自动重放。
+仅人工核对后可用 --resume --skip-uncertain 或 --retry-uncertain，已有资源 id 禁止再次创建。
+本轮假 CLI 测试验证的是跳过/失败收录与防重放，不代表真实飞书发布成功。
+
+## 从 0.3.0 / 0.3.1 更新到 0.3.2
+
+更新同一市场和插件，重启客户端并新开会话即可加载 0.3.2 的共同 Skill；Codex 更新命令见下文。
+旧 Codex Skill 路径保留同内容兼容投影，清单改为直接加载根目录共同 Skill；旧脚本参数和原 Codex 收据继续可用，
+没有自动把旧直接脚本运行标成已绑定。新报告按共同 Skill 先 verify，已开始的运行保留原包、收据和参数续跑。
+完整旧 Codex 身份续跑升级时记录已知旧版本与待提交版本，磁盘错误后可按原参数重试；原有效草稿仍可用冻结输出离线收录。
+升级记录丢失、损坏或偏离已知版本时停止，不删除它来强行放行。
+同一运行目录只启动一名执行者；收到升级竞争提示时，等另一进程结束后用原参数续跑。
+Claude 0.3.1 的 report_output 下拉不迁成自动同步；要同步须打开 feishu_output 一次，新会话生效。
+WorkBuddy 与手工接入使用本宿主偏好/成对连接，不能拷另一客户端含凭据的连接文件来“完成迁移”。
+
+## 从 0.2.x 迁移
+
+插件/市场改为 `strategic-analytics@strategic`，工具改为 `strategic_` 前缀（旧名不设别名）。
+GitHub 新仓库 `ccchenhuohuo/strategic-plugin`，旧地址自动跳转；网关仍为 `/flywheel/mcp`。
+旧安装需卸载重装；无需依次经历 0.3 内部迭代。
+
+Codex：
 
 ```bash
 codex plugin remove flywheel-analytics@flywheel
@@ -138,79 +248,49 @@ codex plugin marketplace remove flywheel
 codex mcp remove flywheel
 codex plugin marketplace add ccchenhuohuo/strategic-plugin
 codex plugin add strategic-analytics@strategic
-export STRATEGIC_MCP_TOKEN="你的令牌"
 codex mcp get strategic --json
 ```
 
-若没有添加过用户级临时 MCP，`codex mcp remove flywheel` 提示未配置即可继续。
-把 shell 配置里的令牌变量改为 `STRATEGIC_MCP_TOKEN`；桌面端 / IDE 还需按「安装前准备」更新进程环境，
-然后完全退出并重新打开 Codex、新建会话。只设置 `FLYWHEEL_MCP_TOKEN` 无法认证新 Codex 插件。
+未配置过用户级 flywheel 时 remove 的“未配置”提示可继续。先将启动环境中的认证变量改为
+`STRATEGIC_MCP_TOKEN`，重启客户端并新建会话；旧变量无法认证新 Codex MCP。
+0.3.2 已包含原生季报和 setup。
 
-### 环境变量过渡兼容（直接运行脚本）
+Claude Code：
 
-季报脚本先读 `STRATEGIC_MCP_URL` / `STRATEGIC_MCP_TOKEN`、`STRATEGIC_PIP_INDEX_URL`、`STRATEGIC_CHART_PYTHON`；
-新变量未设置时可回退同后缀的 `FLYWHEEL_*`，旧名均已弃用。
-地址与令牌按变量族成对选择：有 `STRATEGIC_MCP_URL` 就只取 `STRATEGIC_MCP_TOKEN`；否则有
-`FLYWHEEL_MCP_URL` 就只取 `FLYWHEEL_MCP_TOKEN`。缺少对应族令牌时也不借用另一族或插件令牌。
-没有显式环境地址时，先取带令牌的连接文件；再取插件默认地址与环境令牌（新名优先，旧名回退）。
-
-## 验证（两端相同）
-
-```
-/mcp
+```text
+/plugin uninstall flywheel-analytics@flywheel
+/plugin marketplace remove flywheel
+/plugin marketplace add ccchenhuohuo/strategic-plugin
+/plugin install strategic-analytics@strategic
+/plugin configure strategic-analytics@strategic
 ```
 
-看到 strategic 服务器处于 connected（Claude 插件可能显示为 `plugin:strategic-analytics:strategic`）。
-再问一句"数据是什么时候的？多久更新一次？"，
-能返回当前数据范围与水位月份就说明端到端通了。
+在配置框重新填访问令牌并新开会话；新版 Claude 配置无需环境变量。
 
-如果连接失败，依次检查：
+## 连接验证与更新
 
-1. Claude Code：是否已在插件配置里填了令牌（`/plugin configure strategic-analytics@strategic`），填完是否新开了会话。
-2. Codex 的 `codex mcp get strategic --json` 是否包含 `bearer_token_env_var = STRATEGIC_MCP_TOKEN`；不符时重新安装新插件。
-3. Codex：**客户端进程**是否能读取 `STRATEGIC_MCP_TOKEN`；当前终端有变量，不代表已启动的桌面应用也有。
-4. 令牌是否正确、能否访问上表里的端点。
+查看客户端 MCP 状态（可用 `/mcp`），然后要求调用 `strategic_data_status` 查看当前数据范围和水位。
+`codex mcp get` 仅验证配置，auth_status 的 Unknown/unsupported 不单独证明令牌失效。
+若失败，核对 MCP 是否唯一、Codex 进程是否继承同名环境令牌、Claude 配置是否已填写，以及实际网络连通。
+MCP 不可用时停止取数，不用缓存、记忆或其他源替代。
 
-`codex mcp get` 只验证配置；`auth_status` 的 `Unknown` / `unsupported` 也不能单独证明令牌失效。
-以实际连接和 `strategic_data_status` 调用成功为准。
-**插件不会用缓存或记忆中的数字兜底**——MCP 不可用时它会如实说明并停止。
-
-## 更新与卸载
-
-已迁移到 Strategic 的 Claude Code 用户更新：
-
-```
-/plugin marketplace update strategic
-/plugin update strategic-analytics@strategic
-```
-
-Claude Code 卸载插件、删除市场：
-
-```
-/plugin uninstall strategic-analytics@strategic
-/plugin marketplace remove strategic
-```
-
-Codex 更新：
+Codex 更新/卸载：
 
 ```bash
 codex plugin marketplace upgrade strategic
 codex plugin add strategic-analytics@strategic
 ```
 
-`marketplace upgrade` 要求当前 CLI 已登记 Git 市场。用 `codex plugin marketplace list --json` 核对当前配置；
-如果来源是本地目录，需自行更新该目录。其他客户端、机器或其他 `CODEX_HOME` 的安装不会登记到当前配置。
-更新后完全重启客户端并新建会话。
-
-Codex 卸载插件、删除市场：
-
 ```bash
 codex plugin remove strategic-analytics@strategic
 codex plugin marketplace remove strategic
 ```
 
-卸载插件不会删除手动添加的用户级 MCP；如果配置过同名临时覆盖，另执行 `codex mcp remove strategic`。
-0.2.x 的旧安装请先按上面的迁移节处理。
+Git 市场用 upgrade；本地市场自行更新源码。不同 CODEX_HOME 资料各自安装，更新后重启并新建会话。
+卸载不会清掉手工用户级 MCP；需要时另执行 `codex mcp remove strategic`。
+
+Claude 更新：`/plugin marketplace update strategic`、`/plugin update strategic-analytics@strategic`；
+卸载：`/plugin uninstall strategic-analytics@strategic`、`/plugin marketplace remove strategic`。
 
 ## 能力边界
 
@@ -234,48 +314,31 @@ SPU／验收问题先说明上述边界。仅当当前环境确有相关项目�
 
 <!-- END GENERATED CAPABILITIES -->
 
-- **月度粒度**，没有周/日；数据起点 2024-01，上界为当前水位（最大完整月，按次月 16 日交付边界判断），实际范围以 `strategic_data_status` 返回为准。
-- 指标是**市场估算**：销量为估算件数、金额为价×量推导值，不是 GMV、实付或订单数。
-- 贡献与结构变化是**数学分解，不是因果**；插件不做预测，也不给进入/退出、定价、预算类经营建议。
-- **缺失不等于零**：'未分类' 是独立桶，映射存在但当月无观察表述为"无观察"，超出水位表述为"尚无完整数据"。
-- 跨站点本币金额不可相加，需按站点分别展示或改用人民币口径（服务端按 release 冻结的汇率快照换算）。
-- 价格带为政策固定分桶，不支持自定义；平台原始类目只到 L3；不接受任意 SQL。
+- 电商为月度匹配子集估算，不是 GMV/实付/订单数；实际水位与代次以 data_status 为准。
+- 跨站点金额用 release 冻结的 CNY 汇率快照；本币不跨站点相加。
+- 不预测，不写进入/退出、定价、预算类经营建议；数学贡献不是因果。
+- 商品身份不是 SKU 总数、在售链接数或 SPU；出货不是电商销量，行业链不混算。
+- 固定价格带，不支持自定义 SQL、周/日粒度或未纳入站点；缺失、检疫、归档不得补零。
+- 同参数可复现仍可绑定的 release；SKU 明细还要求在线切片，归档会明确披露。
 
-这些不是 bug，是治理约束。插件遇到越界请求会拒绝并给出合规的替代路径。
+## 架构与分发
 
-## 给维护者
+本仓库是插件分发树，包含安装所需的共同 Skill、角色参考、脚本、配置、清单和用户文档。受治理服务、数据构建、方法论生成器和开发测试在维护仓库中；安装插件不会部署数据库或赋予直接查询 Doris 的权限。
 
-本仓库是**插件分发子集**，只包含使用者安装所需的内容。三层架构（Doris 治理表 + 薄 MCP + 方法论文本层）、构建管线、断言与验收手册在内部仓库，
-不随插件分发。Skill 承载完整规则与能力路由；MCP instructions 保持简短，完整规则也可经 `strategic_describe_semantics` 按需读取，具体查询附带响应警示。
+架构见 [ARCHITECTURE](docs/ARCHITECTURE.md)，验证事实与限制见 [0.3.2 验收范围](docs/ACCEPTANCE-0.3.2.md)。通用分析规则和季报角色分别由维护仓库的 CORE/REPORT 单一正本生成，设置入口也同源；各工作台共用同一套执行契约。
 
-### 双客户端打包约定
+| 客户端 | 分发入口 | 执行方式 |
+| --- | --- | --- |
+| Codex | .codex-plugin/plugin.json，明确选择共同 Skill 和薄 setup；空 hooks 文件 | 本地 CLI/bearer 声明核对，三个命名空间 Skill，统一脚本 |
+| Claude Code | .claude-plugin/plugin.json、.mcp.json 与 SessionStart hooks | userConfig 成对交接，共同 Skill；现有 Workflow 为可选优化 |
+| WorkBuddy | 官方兼容的同一 .claude-plugin 包，或 MCP + 显式 Skill | 本宿主配对连接、共同角色参考和脚本；本轮未实机验证 |
 
-| 消费端 | 插件清单 | MCP 认证来源 |
-|---|---|---|
-| Claude Code | `.claude-plugin/plugin.json` | 清单 `userConfig`：`strategic_token`（sensitive，存钥匙串）与 `strategic_url`（默认生产）；根目录 `.mcp.json` 引用 `${user_config.strategic_url}` 与 `Bearer ${user_config.strategic_token}` |
-| Codex | `.codex-plugin/plugin.json` | 原生清单内联 `mcpServers.strategic.bearer_token_env_var = "STRATEGIC_MCP_TOKEN"` |
+每个完整包保留 .claude-plugin/、.codex-plugin/、.mcp.json、codex/、skills/、agents/、hooks/、workflows/ 和 docs/。不要漏隐藏目录或只复制 SKILL.md；references/scripts/config 是执行依赖。
 
-Codex 清单内联声明完整的同名服务器，覆盖默认发现的 Claude MCP 条目，避免依赖 Claude `headers`
-字段的自动转换。根目录 `.mcp.json` 保留 Claude 格式；Skill 共用 `skills/strategic-analytics/`。
-现有 `.claude-plugin/marketplace.json` 已用两个 CLI 实测可安装，无需维护第二套市场目录。
+```bash
+node "/实际包根/skills/quarterly-report/scripts/report.mjs" --help
+```
 
-季报脚本经 Bash 直连服务，Bash 的环境里没有插件配置：`hooks/connection.sh`（SessionStart）把地址与令牌写进
-`${CLAUDE_PLUGIN_DATA}/connection.env`（0600），runner Agent 以 `--connection` 交给脚本。地址与令牌总是成对取自
-同一来源：先按新旧变量族成对取环境连接，否则取带令牌的连接文件，再否则取默认地址与环境令牌（新名优先，旧名已弃用）。
-随后 `hooks/output.sh` 把 `report_output` 的选择记为 `feishu=0/1`，与 CLI 路径写入 `${CLAUDE_PLUGIN_DATA}/output.env`；图表托管环境放在
-`${CLAUDE_PLUGIN_DATA}/chart-env`。Python 绘图器及锁定依赖文件位于 `skills/quarterly-report/scripts/charts/`，随 `skills/` 分发。
+两份清单的名称、版本及服务端点保持一致。发布标签绑定实际分发提交；GitHub Release、README、CHANGELOG 同步更新。运行偏好和凭据在本宿主资料中，不随代码分发。0.3.2 不更新远程 MCP 或数据管线。
 
-发布制品必须同时包含 `.claude-plugin/`、`.codex-plugin/`、`.mcp.json`、`skills/`（含季报脚本与配置）、`agents/`、`workflows/`、`hooks/` 与本 README，
-注意打包时不要漏掉隐藏目录。两份 `plugin.json` 的名称和版本必须一致，Codex 清单里的 URL 必须等于 `strategic_url` 的默认值。
-当前源码版本为 0.3.1；发布时同步更新两份清单，旧版缓存不会因只修改源码而自动刷新。
-服务端优先读取 `STRATEGIC_PORT` / `STRATEGIC_TOKEN` / `STRATEGIC_AUTH`，未设置时回退已弃用的 `FLYWHEEL_*`；
-MCP 的生产 `/etc/flywheel-mcp.env`、systemd 服务名与部署目录本次保持不变。0.3.0 改名时插件和服务端需在同一发布窗口切换，旧工具名不提供别名；0.3.1 的插件改动不要求更新 MCP 服务端。
-
-每次发布同时更新 README 与 CHANGELOG，将版本标签绑定到实际分发提交，并创建同版本 GitHub Release。
-发布后核对默认分支、两份插件清单、标签和 Releases 的最新版本一致；本机重新安装后核对 Skill 与分发文件一致。
-
-配置依据：[Codex MCP 配置](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)、
-[Codex 插件构建](https://learn.chatgpt.com/docs/build-plugins)、
-[Claude Code 插件参考](https://code.claude.com/docs/en/plugins-reference)。
-OpenAI 的 [Claude 插件提交转换说明](https://developers.openai.com/plugins/guides/submit-claude-plugin)
-讲的是提交门户流程；本仓库的客户端兼容性以原生清单和实际 CLI 加载结果验证。
+依据：[OpenAI 插件打包与 onboarding](https://developers.openai.com/plugins/build/plugins)、[兼容插件说明](https://developers.openai.com/plugins/guides/submit-claude-plugin)、[WorkBuddy/CodeBuddy 插件参考](https://www.codebuddy.cn/docs/cli/plugins-reference)。客户端兼容范围以本版验收记录为准。

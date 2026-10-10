@@ -1,7 +1,7 @@
 {
   "name": "strategic-analytics",
-  "version": "0.3.1",
-  "description": "战略大盘分析：14 个受治理只读 MCP 工具，月度估算口径与复现戳；Skill 提供完整规则和能力路由，语义工具按需说明。",
+  "version": "0.3.2",
+  "description": "战略大盘分析：14 个受治理只读 MCP 工具；共用分析与季报 Skill、配对连接和确定性脚本，数字附复现戳与口径警示。",
   "author": {
     "name": "chenyu"
   },
@@ -19,12 +19,16 @@
       "description": "默认即生产服务，一般不用改；只在测试开发服务时修改。",
       "default": "https://voc.ulanzi.com:28081/flywheel/mcp"
     },
-    "report_output": {
-      "type": "string",
-      "title": "季报输出方式",
-      "description": "选「飞书云文档」时，校验通过的季报会在你的飞书个人空间生成文档与附表（不共享）；需要本机已安装并登录 lark-cli。会话开始时检查，找不到则只输出 Markdown。",
-      "options": ["Markdown", "飞书云文档"],
-      "default": "Markdown"
+    "feishu_output": {
+      "type": "boolean",
+      "title": "同步飞书云文档报告",
+      "description": "本地始终生成 Markdown 报告；开启后，机械校验通过的报告再同步一份到你的飞书个人空间（文档与附表，不共享）。需要本机已安装并登录 lark-cli，会话开始时检查。",
+      "default": false
+    },
+    "report_dir": {
+      "type": "directory",
+      "title": "本地报告目录",
+      "description": "季报 Markdown 与图表收录在这里；留空使用 ~/Documents/战略季报。"
     }
   }
 }

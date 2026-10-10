@@ -1,6 +1,6 @@
 export const meta = {
   name: 'quarterly-report',
-  description: '生成战略季报（CMI 全球市场洞察）：取数与出图 → 分章写洞察 → 执行摘要 → 机械校验与对抗核查 → 修订 → 飞书输出',
+  description: '生成战略季报（CMI 全球市场洞察）：取数与出图 → 分章写洞察 → 执行摘要 → 机械校验与对抗核查 → 修订 → 飞书同步 → 本地收录',
   whenToUse: '用户要求生成季报或季度市场洞察报告时。参数：current_start、current_end、label（必填），config、out、release_id、sections（可选）',
   phases: [
     { title: '取数', detail: '脚本按骨架调用 受治理工具，落证据账本、表格与写手摘要' },
@@ -9,12 +9,14 @@ export const meta = {
     { title: '执行摘要', detail: '各章完成后写全球趋势与重点类目要点' },
     { title: '校验', detail: '组装报告，机械校验骨架、数字溯源与禁用词' },
     { title: '修订', detail: '机械校验不过的叙述位重写一次，再校验' },
-    { title: '发布', detail: '校验通过后按输出方式生成个人空间飞书文档与附表；失败保留 Markdown' },
+    { title: '发布', detail: '校验通过且开启同步后生成个人空间飞书文档与附表；失败保留 Markdown' },
+    { title: '收录', detail: '把报告与图表收录到本地报告目录，更新索引' },
   ],
 }
 
 // ── 参数：斜杠命令传来的是字符串（key=value），也接受对象 ─────────────────────
-const KEYS = ['current_start', 'current_end', 'label', 'config', 'out', 'release_id', 'sections']
+const BOUND_KEYS = ['portable_binding', 'output_env', 'runs_dir', 'chart_env']
+const KEYS = ['current_start', 'current_end', 'label', 'config', 'out', 'release_id', 'sections', ...BOUND_KEYS]
 function parseArgs(raw) {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw
   const text = Array.isArray(raw) ? raw.join(' ') : String(raw ?? '')
@@ -29,7 +31,14 @@ const input = parseArgs(args)
 for (const key of Object.keys(input)) if (!KEYS.includes(key)) throw new Error(`未知参数 ${key}；可用：${KEYS.join(', ')}`)
 for (const key of ['current_start', 'current_end', 'label']) if (!input[key]) throw new Error(`缺少参数 ${key}，例如 current_start=2026-01 current_end=2026-04 label=26Q1`)
 for (const key of ['current_start', 'current_end']) if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input[key])) throw new Error(`${key} 必须是 YYYY-MM`)
-for (const [key, value] of Object.entries(input)) if (!/^[A-Za-z0-9_.,:\/\-]+$/.test(String(value))) throw new Error(`参数 ${key} 含不允许的字符`)
+for (const [key, value] of Object.entries(input).filter(([key]) => !BOUND_KEYS.includes(key))) if (!/^[A-Za-z0-9_.,:\/\-]+$/.test(String(value))) throw new Error(`参数 ${key} 含不允许的字符`)
+
+const bound = BOUND_KEYS.some((key) => input[key] !== undefined)
+if (bound && BOUND_KEYS.some((key) => typeof input[key] !== 'string' || !input[key].startsWith('/') || /[\x00-\x1f\x7f]/u.test(input[key]))) throw new Error('绑定 Workflow 须提供 portable_binding/output_env/runs_dir/chart_env 四个安全绝对路径；含空格路径请用结构化参数')
+const shellQuote = (value) => "'" + String(value).replaceAll("'", "'\\''") + "'"
+const bindingCli = bound ? `--portable-binding ${shellQuote(input.portable_binding)} --runs-dir ${shellQuote(input.runs_dir)}` : '--connection "<你的说明里给出的连接文件路径>" --runs-dir "<你的说明里给出的运行目录上级路径>"'
+const outputArg = bound ? shellQuote(input.output_env) : '"<你的说明里给出的输出配置路径>"'
+const chartArg = bound ? shellQuote(input.chart_env) : '"<你的说明里给出的图表环境目录>"'
 
 const cli = [
   `--current-start ${input.current_start}`, `--current-end ${input.current_end}`, `--label ${input.label}`,
@@ -47,6 +56,7 @@ const PREP_SCHEMA = {
   properties: {
     ok: { type: 'boolean' },
     run_dir: { type: 'string' },
+    output_env: { type: 'string' },
     release_id: { type: 'string' },
     groups: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, slots: { type: 'array', items: { type: 'string' } } }, required: ['id', 'slots'] } },
     calls: { type: 'number' },
@@ -99,9 +109,17 @@ const PUBLISH_SCHEMA = {
     doc_url: { type: 'string' }, workbook_url: { type: 'string' }, error: { type: 'string' },
     failed_step: { type: 'string' }, resume: { type: 'string' },
     incomplete: { type: 'boolean' }, completed: { type: 'number' }, total: { type: 'number' },
-    json_received: { type: 'boolean' }, timed_out: { type: 'boolean' },
+    json_received: { type: 'boolean' }, timed_out: { type: 'boolean' }, cancelled: { type: 'boolean' },
   },
   required: ['ok', 'json_received', 'timed_out'],
+}
+const COLLECT_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' }, dir: { type: ['string', 'null'] }, report: { type: ['string', 'null'] },
+    index: { type: ['string', 'null'] }, error: { type: 'string' },
+  },
+  required: ['ok', 'dir', 'report', 'index'],
 }
 
 // 写手只拿运行目录与叙述位编号，路径按固定规则拼：避免模型转抄长路径出错。
@@ -133,17 +151,19 @@ phase('取数')
 const prep = await agent([
   '运行季报取数。在 Bash 中执行（参数逐字使用，不要增删或改写）：',
   '',
-  `node "<你的说明里给出的 report.mjs 路径>" prepare ${cli} --connection "<你的说明里给出的连接文件路径>"`,
+  `node "<你的说明里给出的 report.mjs 路径>" prepare ${cli} ${bindingCli}`,
   '',
   '命令可能较慢：Bash 超时设为最大值；若因超时或中断结束而没有最后一行 JSON，按你的说明用相同参数加 --resume 与 stderr 中 RUN_DIR 的目录续跑。',
-  '命令结束后读取标准输出最后一行的 JSON，按结构化输出返回：ok、run_dir、release_id、calls、errors，',
+  '命令结束后读取标准输出最后一行的 JSON，按结构化输出返回：ok、run_dir、output_env（若有）、release_id、calls、errors，',
   '以及 groups（取 JSON 里 writer_groups 的每一项的 id 与 slots 里的 slot 编号，保持顺序）。',
   '命令失败（非零退出或没有 JSON）时 ok=false，errors 放退出码与最后 20 行输出。',
 ].join('\n'), { label: 'prepare', phase: '取数', agentType: RUNNER, schema: PREP_SCHEMA })
 if (!prep || !prep.ok) {
   return { ok: false, stage: 'prepare', errors: prep ? prep.errors : ['取数 Agent 未返回'] }
 }
+if (bound && prep.output_env !== input.output_env) return { ok: false, stage: 'prepare', errors: ['prepare 返回的冻结 output_env 与调用方不一致，停止流程'] }
 const runDir = prep.run_dir
+const runArg = bound ? shellQuote(runDir) : runDir
 // 出图立即启动，持有 promise 与分章写作并行；立即 catch，避免后台失败成为未处理拒绝。
 phase('出图')
 const chartTask = (async () => {
@@ -151,7 +171,7 @@ const chartTask = (async () => {
     const result = await agent([
       '从本次证据生成图表。在 Bash 中执行（逐字使用路径，timeout=600000 ms）：',
       '',
-      `node "<你的说明里给出的 report.mjs 路径>" charts --run-dir ${runDir} --env-dir "<你的说明里给出的图表环境目录>"`,
+      `node "<你的说明里给出的 report.mjs 路径>" charts --run-dir ${runArg} --env-dir ${chartArg}`,
       '',
       '读取标准输出最后一行 JSON，原样返回 ok、total、passed、rejected、skipped、failed、reason。',
       '图表是可选产物：失败、超时或没有最后一行 JSON 时返回 ok=false、各计数为 0，reason 放退出码与最后 20 行输出；不要重试或修改证据。',
@@ -212,89 +232,154 @@ if (summaryGroup && summaryGroup.slots.length) {
 }
 
 // ── 4. 组装与机械校验 ────────────────────────────────────────────────────────
-const runCheck = (label, phaseName) => agent([
+const runCheck = async (label, phaseName) => {
+  const result = await agent([
   '在 Bash 中依次执行（逐字使用路径）：',
   '',
-  `node "<你的说明里给出的 report.mjs 路径>" assemble --run-dir ${runDir}`,
-  `node "<你的说明里给出的 report.mjs 路径>" check --run-dir ${runDir}`,
+  `node "<你的说明里给出的 report.mjs 路径>" assemble --run-dir ${runArg}`,
+  `node "<你的说明里给出的 report.mjs 路径>" check --run-dir ${runArg}`,
   '',
   '按 check 命令标准输出最后一行的 JSON 返回：ok、blocking（每项的 slot/table、type、detail、excerpt）、warnings（数量）、',
   'exit_code，report 取 assemble 最后一行 JSON 的 report 字段。不要修改任何文件。',
-].join('\n'), { label, phase: phaseName, agentType: RUNNER, schema: CHECK_SCHEMA })
+  ].join('\n'), { label, phase: phaseName, agentType: RUNNER, schema: CHECK_SCHEMA })
+  if (result && !Array.isArray(result.blocking)) throw new TypeError('校验 Agent 未返回有效阻断列表')
+  return result
+}
 
 // 图表索引必须写完才能组装；其失败只记录结果，不阻断文字报告。
 const charts = await chartTask
 if (charts.reason) log(`图表：${charts.reason}`)
-phase('校验')
-let check = await runCheck('assemble+check', '校验')
-
-// ── 5. 修订：机械校验阻断的叙述位重写一次，再校验 ───────────────────────────
-const blockingSlots = (result) => [...new Set((result && result.blocking ? result.blocking : []).map((item) => item.slot).filter(Boolean))]
-const toFix = blockingSlots(check).filter((slot) => !slot.startsWith('table'))
-if (check && !check.ok && toFix.length) {
-  phase('修订')
-  const bySlot = (slot) => check.blocking.filter((item) => item.slot === slot).map((item) => ({ slot, type: item.type, reason: item.detail, excerpt: item.excerpt }))
-  const isSummarySlot = (slot) => Boolean(summaryGroup && summaryGroup.slots.includes(slot))
-  const summarySlots = toFix.filter(isSummarySlot)
-  const sectionSlots = toFix.filter((slot) => !isSummarySlot(slot))
-  await parallel([
-    ...sectionSlots.map((slot) => () => agent(writePrompt(runDir, [slot], bySlot(slot)), { label: `修:${slot}`, phase: '修订', agentType: WRITER, schema: WRITE_SCHEMA })),
-    ...(summarySlots.length ? [() => agent(writePrompt(runDir, summarySlots, summarySlots.flatMap(bySlot)), { label: '修:summary', phase: '修订', agentType: SUMMARY, schema: WRITE_SCHEMA })] : []),
-  ])
-  check = await runCheck('re-check', '修订')
-}
-
-const remaining = check ? check.blocking : [{ type: 'check_failed', detail: '校验 Agent 未返回' }]
-if (remaining.length) log(`仍有 ${remaining.length} 个阻断问题，报告里保留标记，需人工处理`)
-
-// 发布只在最终机械校验通过后进行；发布失败不改变报告本身的 ok。
+let check = null
+let stage = 'assemble+check'
+let workflowError = null
+let published = null
 let feishu = { status: 'skipped', error: '机械校验未通过，不发布到飞书' }
-if (check && check.ok) {
-  phase('发布')
-  const publishCommand = `node "<你的说明里给出的 report.mjs 路径>" publish --run-dir ${runDir} --output-env "<你的说明里给出的输出配置路径>"${unverifiedGroups.length ? ` --unverified ${unverifiedGroups.join(',')}` : ''}`
-  // 完整季报约 120 步、十几分钟：脚本每次运行约 6 分 40 秒（400 秒预算）就在两步之间停下并返回 incomplete=true，这里按同一命令加 --resume 接着跑。
-  // 命令被外层超时杀掉而没有 JSON 时同样续跑；两者合计最多续跑 7 次。
-  const MAX_RESUMES = 7
-  let published = null
-  let previous = null
-  for (let attempt = 0; attempt <= MAX_RESUMES; attempt++) {
-    // 分段续跑（上次在两步之间正常停下）与中断续跑（上次被外层超时杀掉）的提醒不同。
-    const resumeNote = !attempt ? [] : previous && previous.incomplete === true
-      ? ['这是分段发布的续跑：上一段已在两步之间正常停下，从下一步接着执行。']
-      : ['这是因超时中断且未收到最后一行 JSON 的续跑。若日志有待确认写入，脚本会拒绝重放并返回链接，请人工核对。']
-    try {
+let library = { ok: false, dir: null, report: null, index: null, error: '收录 Agent 未返回有效结果' }
+const errorDetails = (error, failedStage) => ({
+  stage: failedStage,
+  name: error && error.name ? String(error.name) : 'Error',
+  message: error && error.message ? String(error.message) : String(error),
+  ...(error && ['string', 'number'].includes(typeof error.code) ? { code: error.code } : {}),
+})
+const cancelled = (error) => Boolean(error && (
+  /^(AbortError|Cancel(?:led|ed)Error)$/u.test(error.name ?? '') ||
+  /^(ABORT_ERR|ERR_CANCELED|USER_CANCEL(?:LED|ED))$/u.test(String(error.code ?? ''))
+))
+
+// 从第一次 assemble 可能写出 report.md 起保护收尾。Agent 没有返回，并不能证明文件没有生成。
+try {
+  phase('校验')
+  check = await runCheck('assemble+check', '校验')
+
+  // ── 5. 修订：机械校验阻断的叙述位重写一次，再校验 ───────────────────────────
+  const blockingSlots = (result) => [...new Set((result && result.blocking ? result.blocking : []).map((item) => item.slot).filter(Boolean))]
+  const toFix = blockingSlots(check).filter((slot) => !slot.startsWith('table'))
+  if (check && !check.ok && toFix.length) {
+    stage = 'rewrite'
+    phase('修订')
+    const bySlot = (slot) => check.blocking.filter((item) => item.slot === slot).map((item) => ({ slot, type: item.type, reason: item.detail, excerpt: item.excerpt }))
+    const isSummarySlot = (slot) => Boolean(summaryGroup && summaryGroup.slots.includes(slot))
+    const summarySlots = toFix.filter(isSummarySlot)
+    const sectionSlots = toFix.filter((slot) => !isSummarySlot(slot))
+    // parallel 的运行时可能吞掉子任务拒绝；显式记录错误，等本轮任务结束后停止校验与发布。
+    const revisionErrors = []
+    const revision = (prompt, options) => async () => {
+      try { return await agent(prompt, options) }
+      catch (error) { revisionErrors.push(error); return null }
+    }
+    await parallel([
+      ...sectionSlots.map((slot) => revision(writePrompt(runDir, [slot], bySlot(slot)), { label: `修:${slot}`, phase: '修订', agentType: WRITER, schema: WRITE_SCHEMA })),
+      ...(summarySlots.length ? [revision(writePrompt(runDir, summarySlots, summarySlots.flatMap(bySlot)), { label: '修:summary', phase: '修订', agentType: SUMMARY, schema: WRITE_SCHEMA })] : []),
+    ])
+    if (revisionErrors.length) throw revisionErrors[0]
+    stage = 're-check'
+    check = await runCheck('re-check', '修订')
+  }
+
+  const remaining = check ? check.blocking : [{ type: 'check_failed', detail: '校验 Agent 未返回' }]
+  if (remaining.length) log(`仍有 ${remaining.length} 个阻断问题，报告里保留标记，需人工处理`)
+
+  // 正常返回的发布失败不改变报告的校验 ok；Agent 异常单独标记整个 Workflow 未完成。
+  if (check && check.ok) {
+    stage = 'publish'
+    phase('发布')
+    const publishCommand = `node "<你的说明里给出的 report.mjs 路径>" publish --run-dir ${runArg} --output-env ${outputArg}${unverifiedGroups.length ? ` --unverified ${unverifiedGroups.join(',')}` : ''}`
+    // 脚本明确返回 incomplete，或明确的命令超时无 JSON，合计最多续跑 7 次；用户取消和 Agent 抛错不续跑。
+    const MAX_RESUMES = 7
+    let previous = null
+    for (let attempt = 0; attempt <= MAX_RESUMES; attempt++) {
+      const resumeNote = !attempt ? [] : previous && previous.incomplete === true
+        ? ['这是分段发布的续跑：上一段已在两步之间正常停下，从下一步接着执行。']
+        : ['这是因超时中断且未收到最后一行 JSON 的续跑。若日志有待确认写入，脚本会拒绝重放并返回链接，请人工核对。']
       published = await agent([
-        '按输出方式发布已通过机械校验的报告。在 Bash 中执行（逐字使用路径，timeout=600000 ms）：',
+        '按同步开关发布已通过机械校验的报告。在 Bash 中执行（逐字使用路径，timeout=600000 ms）：',
         '',
         publishCommand + (attempt ? ' --resume' : ''),
         '',
         ...resumeNote,
         '不要直接运行 lark-cli。读取最后一行 JSON，原样返回 ok、target、feishu、doc_url、workbook_url、error、failed_step、resume、incomplete、completed、total；有 JSON 时 json_received=true、timed_out=false。',
-        '只有命令因超时中断且没有最后一行 JSON 时，返回 ok=false、json_received=false、timed_out=true，error 放退出码与最后 20 行输出。其他失败 timed_out=false。不要自行续跑。',
+        '只有命令因超时中断且没有最后一行 JSON 时，返回 ok=false、json_received=false、timed_out=true，error 放退出码与最后 20 行输出。用户取消时 cancelled=true、timed_out=false；其他失败 timed_out=false。不要自行续跑。',
       ].join('\n'), { label: attempt ? `publish:resume:${attempt}` : 'publish', phase: '发布', agentType: RUNNER, schema: PUBLISH_SCHEMA })
-    } catch (error) {
-      published = { ok: false, error: error && error.message ? error.message : String(error), json_received: false, timed_out: false }
+      if (published && published.cancelled === true) throw Object.assign(new Error(published.error || '用户取消了飞书发布'), { name: 'AbortError', code: 'USER_CANCELLED' })
+      previous = published
+      const interrupted = published && published.json_received === false && published.timed_out === true
+      const unfinished = published && published.incomplete === true
+      if (!interrupted && !unfinished) break
+      if (attempt < MAX_RESUMES) log(unfinished
+        ? `飞书发布分段进行：已完成 ${published.completed ?? '?'}/${published.total ?? '?'} 步，使用 --resume 续跑（${attempt + 1}/${MAX_RESUMES}）`
+        : `飞书发布命令超时且未返回 JSON，使用 --resume 续跑（${attempt + 1}/${MAX_RESUMES}）`)
     }
-    previous = published
-    const interrupted = published && published.json_received === false && published.timed_out === true
-    const unfinished = published && published.incomplete === true
-    if (!interrupted && !unfinished) break
-    if (attempt < MAX_RESUMES) log(unfinished
-      ? `飞书发布分段进行：已完成 ${published.completed ?? '?'}/${published.total ?? '?'} 步，使用 --resume 续跑（${attempt + 1}/${MAX_RESUMES}）`
-      : `飞书发布命令超时且未返回 JSON，使用 --resume 续跑（${attempt + 1}/${MAX_RESUMES}）`)
+    if (published && published.ok && published.target === 'feishu') {
+      feishu = { status: 'published', doc_url: published.doc_url, workbook_url: published.workbook_url }
+    } else if (published && published.ok && published.feishu === 'disabled') {
+      feishu = { status: 'disabled' }
+    } else {
+      feishu = { status: 'failed', ...(published && published.doc_url ? { doc_url: published.doc_url } : {}), ...(published && published.workbook_url ? { workbook_url: published.workbook_url } : {}), error: published && published.error ? published.error : '发布 Agent 未返回有效结果' }
+      log(`飞书发布失败，保留 Markdown：${feishu.error}`)
+    }
+  } else log(feishu.error)
+} catch (error) {
+  workflowError = errorDetails(error, stage)
+  feishu = {
+    status: cancelled(error) ? 'cancelled' : stage === 'publish' ? 'failed' : 'skipped',
+    ...(published && published.doc_url ? { doc_url: published.doc_url } : {}),
+    ...(published && published.workbook_url ? { workbook_url: published.workbook_url } : {}),
+    error: workflowError.message,
   }
-  if (published && published.ok && published.target === 'feishu') {
-    feishu = { status: 'published', doc_url: published.doc_url, workbook_url: published.workbook_url }
-  } else if (published && published.ok && published.feishu === 'disabled') {
-    feishu = { status: 'disabled' }
-  } else {
-    feishu = { status: 'failed', ...(published && published.doc_url ? { doc_url: published.doc_url } : {}), ...(published && published.workbook_url ? { workbook_url: published.workbook_url } : {}), error: published && published.error ? published.error : '发布 Agent 未返回有效结果' }
-    log(`飞书发布失败，保留 Markdown：${feishu.error}`)
+  log(`Workflow 在 ${stage} 阶段失败：${workflowError.message}`)
+} finally {
+  // collect 自己严格检查 report.md。组装写完但响应丢失时仍能收录，未生成时返回失败且不造稿。
+  let collectionPhaseError = null
+  try { phase('收录') }
+  catch (error) { collectionPhaseError = errorDetails(error, 'collect-phase') }
+  try {
+    const collected = await agent([
+      '把本次报告草稿与引用的图表收录到本地报告目录。在 Bash 中执行（逐字使用路径）：',
+      '',
+      `node "<你的说明里给出的 report.mjs 路径>" collect --run-dir ${runArg} --output-env ${outputArg}`,
+      '',
+      '机械校验未通过、Agent 异常、用户取消、飞书未开启或同步失败时也执行本地收录，不再发布。读取最后一行 JSON，原样返回 ok、dir、report、index、error。',
+      '命令失败或没有 JSON 时返回 ok=false，error 放退出码与最后 20 行输出。report.md 尚未生成时如实返回失败；不得生成报告或宣称已收录。',
+    ].join('\n'), { label: 'collect', phase: '收录', agentType: RUNNER, schema: COLLECT_SCHEMA })
+    if (collected && typeof collected.ok === 'boolean' && (!collected.ok || ['dir', 'report', 'index'].every((key) => typeof collected[key] === 'string' && collected[key]))) library = {
+      ok: collected.ok, dir: collected.dir ?? null, report: collected.report ?? null, index: collected.index ?? null,
+      ...(!collected.ok ? { error: collected.error ?? '收录失败，请检查运行目录中的 report.md' } : {}),
+    }
+  } catch (error) {
+    library.exception = errorDetails(error, 'collect')
+    library.error = library.exception.message
   }
-} else log(feishu.error)
+  if (collectionPhaseError) library.phase_exception = collectionPhaseError
+  if (!library.ok) log(`收录失败，请检查运行目录 ${runDir} 中的 report.md：${library.error}`)
+}
+const remaining = check && Array.isArray(check.blocking) ? check.blocking : [{ type: 'check_failed', detail: workflowError ? workflowError.message : '校验 Agent 未返回有效阻断列表' }]
+const collectionFailure = check && check.report
+  ? `本地收录失败，报告草稿仍在运行目录 ${runDir}：${library.error}`
+  : `本地收录失败，尚未确认运行目录 ${runDir} 中的 report.md 已生成：${library.error}`
 return {
-  ok: Boolean(check && check.ok),
-  report: check ? check.report : null,
+  ok: Boolean(check && check.ok && !workflowError),
+  report: check && check.report ? check.report : null,
+  ...(workflowError ? { workflow_error: workflowError } : {}),
   run_dir: runDir,
   release_id: prep.release_id,
   calls: prep.calls,
@@ -307,5 +392,8 @@ return {
   warnings: check ? check.warnings : null,
   charts,
   feishu,
-  note: '报告草稿待人工审阅；飞书文档只建在运行者个人空间、未共享，分享前请人工审阅。',
+  library,
+  note: library.ok
+    ? '报告草稿已收录到本地报告目录，待人工审阅；飞书文档只建在运行者个人空间、未共享，分享前请人工审阅。'
+    : `${collectionFailure}，待人工审阅；飞书文档只建在运行者个人空间、未共享，分享前请人工审阅。`,
 }

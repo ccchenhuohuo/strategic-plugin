@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { clientEnv } from './environment.mjs';
+import { matchNativeEnvironment, nativeEndpoint } from './codex-binding.mjs';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const BUSY = new Set(['SERVICE_BUSY', 'DB_QUERY_TIMEOUT', 'DB_CONNECTION_FAILED']);
@@ -50,6 +51,18 @@ export async function resolveConnection(entry, connectionPath, env = process.env
   try { parsed = new URL(result.url); } catch { parsed = null; }
   if (!parsed || !['http:', 'https:'].includes(parsed.protocol)) throw new Error(`服务地址不是 http(s) URL（来源 ${result.source}）`);
   return result;
+}
+
+/** Native Codex requires a declaration verified from the local CLI. Shared source
+ * pairing supplies its bearer token, with no default/Claude/legacy fallback. */
+export function resolveCodexConnection(entry, declaration, env = process.env) {
+  if (!declaration || declaration.auth_env !== 'STRATEGIC_MCP_TOKEN') throw new Error('--codex 必须提供已验证的 MCP 绑定收据');
+  const endpoint = nativeEndpoint(declaration.endpoint, env);
+  matchNativeEnvironment(endpoint, env);
+  if (!env.STRATEGIC_MCP_TOKEN) throw new Error('--codex 缺少 STRATEGIC_MCP_TOKEN；已拒绝取数');
+  return resolveConnection(entry, null, {
+    STRATEGIC_MCP_URL: endpoint, STRATEGIC_MCP_TOKEN: env.STRATEGIC_MCP_TOKEN,
+  });
 }
 
 function decodeRpc(body, contentType, id) {

@@ -2,21 +2,31 @@
 import { parseArgs } from 'node:util';
 import { writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { McpClient, readConnection, resolveConnection } from './lib/mcp.mjs';
+import { homedir } from 'node:os';
+import { McpClient, readConnection, resolveCodexConnection, resolveConnection } from './lib/mcp.mjs';
 import { addSecret, digest, ensureEmpty, readJson, redact, safeName, unique } from './lib/common.mjs';
 import { dependentCalls, executeStage, isL3Unlabelled, mainCalls, observedSites, persistStage, probes, selectedFocus } from './lib/plan.mjs';
 import { buildTables } from './lib/tables.mjs';
 import { assemble, buildManifest, dataNote, writeArtifacts } from './lib/artifacts.mjs';
 import { check } from './lib/check.mjs';
+import { verifyNativeBinding } from './lib/codex-binding.mjs';
+import { boundOutput, verifyPortableBinding } from './lib/portable-binding.mjs';
+import { assertResumeBinding, finishRunArgs, readRunBinding, startRunArgs } from './lib/run-binding.mjs';
+import { mcpTokens } from './lib/environment.mjs';
+
+for (const token of mcpTokens(process.env)) addSecret(token);
 
 const entry = decodeURIComponent(new URL(import.meta.url).pathname);
 const scriptDir = dirname(entry);
 const defaultConfig = join(dirname(scriptDir), 'config', 'vijim-default.json');
 const help = `用法：
-  node report.mjs prepare --current-start YYYY-MM --current-end YYYY-MM --label LABEL [--config PATH] [--out DIR] [--release-id ID] [--sections 2,3] [--concurrency 1..4] [--force | --resume] [--connection FILE]
+  node report.mjs prepare --current-start YYYY-MM --current-end YYYY-MM --label LABEL [--config PATH] [--out DIR] [--runs-dir DIR] [--release-id ID] [--sections 2,3] [--concurrency 1..4] [--force | --resume] [--connection FILE | --codex | --portable-binding FILE]
+  （Codex 原生流程传 --codex --codex-binding <helper verify 返回的收据> 与 --runs-dir 或 --out；无绑定不联网）
+  （通用入口传 --portable-binding <setup verify 返回的收据>，显式配对连接、无默认地址；输出步骤使用冻结 output_env）
   （进程被超时或中断时：用同样参数加 --resume --out <stderr 里 RUN_DIR= 的目录> 续跑，已成功的调用直接复用）
   node report.mjs assemble --run-dir DIR
   node report.mjs check --run-dir DIR
+  node report.mjs collect --run-dir DIR --output-env FILE
   node report.mjs charts --run-dir DIR [--env-dir DIR] [--python PATH] [--only ID[,ID…]]
   node report.mjs publish --run-dir DIR --output-env FILE [--unverified id,id] [--resume] [--dry-run] [--time-budget 秒]
   （完整季报发布约十几分钟：单次运行到时间预算（默认 400 秒）就在两步之间停下，返回 incomplete=true，用 --resume 续跑）
@@ -30,9 +40,9 @@ FLYWHEEL_MCP_URL（已弃用）就只配对 FLYWHEEL_MCP_TOKEN，两族不得混
 function options(argv) {
   return parseArgs({ args: argv, allowPositionals: true, strict: true, options: {
     'current-start': { type: 'string' }, 'current-end': { type: 'string' }, label: { type: 'string' },
-    config: { type: 'string' }, out: { type: 'string' }, 'release-id': { type: 'string' },
+    config: { type: 'string' }, out: { type: 'string' }, 'runs-dir': { type: 'string' }, 'release-id': { type: 'string' },
     sections: { type: 'string' }, concurrency: { type: 'string' }, force: { type: 'boolean' }, resume: { type: 'boolean' },
-    connection: { type: 'string' }, 'run-dir': { type: 'string' }, help: { type: 'boolean' },
+    connection: { type: 'string' }, codex: { type: 'boolean' }, 'codex-binding': { type: 'string' }, 'portable-binding': { type: 'string' }, 'run-dir': { type: 'string' }, help: { type: 'boolean' },
     'env-dir': { type: 'string' }, python: { type: 'string' }, only: { type: 'string' },
     'output-env': { type: 'string' }, unverified: { type: 'string' }, 'dry-run': { type: 'boolean' }, 'time-budget': { type: 'string' },
     'retry-uncertain': { type: 'boolean' }, 'skip-uncertain': { type: 'boolean' },
@@ -48,6 +58,12 @@ function validateWindow(start, end) {
 }
 
 async function prepare(args) {
+  if (args['portable-binding'] && (args.codex || args['codex-binding'] || args.connection)) throw new Error('--portable-binding 不能与 Codex 绑定或 --connection 混用；连接源已在收据中冻结');
+  if (args['portable-binding'] && !args['runs-dir'] && !args.out) throw new Error('--portable-binding 必须提供 helper 返回的 --runs-dir 或显式 --out');
+  if (args.codex && args.connection) throw new Error('--codex 不能读取 --connection；认证仅用 STRATEGIC_MCP_TOKEN');
+  if (args.codex && !args['runs-dir'] && !args.out) throw new Error('--codex 必须提供 helper 返回的 --runs-dir 或显式 --out');
+  if (args.codex && !args['codex-binding']) throw new Error('--codex 必须提供 helper verify 返回的 --codex-binding；已拒绝取数');
+  if (!args.codex && args['codex-binding']) throw new Error('--codex-binding 仅用于 --codex 原生流程');
   const start = args['current-start'], end = args['current-end'], label = args.label;
   if (!start || !end || !label) throw new Error('prepare 必须提供 --current-start、--current-end、--label');
   validateWindow(start, end);
@@ -59,28 +75,41 @@ async function prepare(args) {
   if (!Array.isArray(config.sites) || !Array.isArray(config.focus) || !Array.isArray(config.company_brands)) throw new Error('配置缺少 sites/focus/company_brands');
   const focuses = selectedFocus(config, sections);
   const customDir = args.out ? resolve(args.out) : null;
-  const identity = { current_start: start, current_end: end, label, config: resolve(args.config ?? defaultConfig), config_digest: digest(config), sections: sections ?? 'all' };
+  const runsDir = resolve(args['runs-dir'] ?? join(homedir(), '.claude/plugins/data/strategic-analytics-strategic/runs'));
+  const dirFor = (release) => customDir ?? join(runsDir, `${safeName(label)}-${safeName(release).slice(0, 15)}`);
+  let saved = null;
+  if (args.resume) {
+    if (args.force) throw new Error('--resume 与 --force 不能同用');
+    if (!customDir) throw new Error('--resume 需要 --out 指向上次的运行目录（见上次 stderr 的 RUN_DIR=）');
+    saved = await readRunBinding(customDir);
+  }
+  const native = args.codex ? await verifyNativeBinding(resolve(args['codex-binding'])) : null;
+  const portable = args['portable-binding'] ? await verifyPortableBinding(resolve(args['portable-binding'])) : null;
+  const mode = portable ? 'portable' : native ? 'codex' : 'unbound';
+  if (saved) assertResumeBinding(saved, { mode, identity: (portable ?? native)?.identity });
+  const identity = { current_start: start, current_end: end, label, config: resolve(args.config ?? defaultConfig), config_digest: digest(config), sections: sections ?? 'all', ...(native ? { codex: true, codex_binding: native.identity } : {}), ...(portable ? { portable_binding: portable.identity } : {}) };
   let previous = null;
   if (args.resume) {
     // 续跑：必须指回同一个运行目录，且取数口径（窗口、标签、配置、章节）逐项一致；release 钉住上次绑定的代次。
-    if (args.force) throw new Error('--resume 与 --force 不能同用');
-    if (!customDir) throw new Error('--resume 需要 --out 指向上次的运行目录（见上次 stderr 的 RUN_DIR=）');
-    try { previous = await readJson(join(customDir, 'run-args.json')); }
-    catch { throw new Error(`--resume 找不到可续跑的运行记录：${customDir}/run-args.json`); }
-    for (const [key, value] of Object.entries(identity)) if (JSON.stringify(previous[key]) !== JSON.stringify(value)) throw new Error(`--resume 的 ${key} 与上次不一致（上次 ${JSON.stringify(previous[key])}，本次 ${JSON.stringify(value)}）`);
+    previous = saved.args;
+    for (const [key, value] of Object.entries(identity)) if (JSON.stringify(previous[key]) !== JSON.stringify(value)) {
+      if (key === 'portable_binding') throw new Error('--resume 的 portable_binding 与上次不一致；已拒绝复用证据');
+      if (key === 'codex_binding') throw new Error('--resume 的 codex_binding 与上次不一致；已拒绝复用证据');
+      throw new Error(`--resume 的 ${key} 与上次不一致（上次 ${JSON.stringify(previous[key])}，本次 ${JSON.stringify(value)}）`);
+    }
     if (args['release-id'] && args['release-id'] !== previous.release_id) throw new Error(`--resume 的 release_id 与上次不一致：${previous.release_id}`);
   } else if (customDir) await ensureEmpty(customDir, args.force);
   const pinnedRelease = args['release-id'] ?? previous?.release_id;
-  const connection = await resolveConnection(entry, args.connection ? resolve(args.connection) : null);
+  const connection = portable ? portable.connection : args.codex ? await resolveCodexConnection(entry, native.receipt) : await resolveConnection(entry, args.connection ? resolve(args.connection) : null);
   const token = connection.token;
   addSecret(token);
-  console.error(`CONNECTION=${connection.source}`);
+  console.error(`CONNECTION=${typeof connection.source === 'string' ? connection.source : connection.source.type}`);
   const client = new McpClient(connection.url, token);
   try { await client.initialize(); }
   catch (error) {
     if (/^HTTP 401\b/.test(error.message ?? '')) {
       throw new Error(!token
-        ? '服务要求访问令牌，但没有拿到：在插件配置里填写令牌（交互式 claude 中 /plugin configure strategic-analytics@strategic）后新开会话，或设置 STRATEGIC_MCP_TOKEN'
+        ? `服务要求访问令牌，但没有拿到：${args.connection ? '在插件配置里填写令牌（交互式 claude 中 /plugin configure strategic-analytics@strategic）后新开会话，或' : ''}设置 STRATEGIC_MCP_TOKEN 后从同一环境启动客户端`
         : `访问令牌被服务拒绝（来源 ${connection.source === 'plugin' ? '插件配置' : '环境变量'}）：核对令牌是否有效`);
     }
     throw error;
@@ -90,27 +119,27 @@ async function prepare(args) {
   const statusCalls = await executeStage(client, [{ key: 'STATUS', tool: 'strategic_data_status', arguments: pinnedRelease ? { release_id: pinnedRelease } : {} }], context);
   const status = results.get('STATUS');
   if (!status.ok) {
-    const failedDir = customDir ?? `/tmp/flywheel-report/${safeName(label)}-${safeName(args['release-id'] ?? 'unbound').slice(0, 15)}`;
+    const failedDir = dirFor(args['release-id'] ?? 'unbound');
     if (!customDir) await ensureEmpty(failedDir, args.force);
     await persistStage(statusCalls, results, failedDir, token);
     throw new Error(`data_status 失败：${status.error.message}；证据 ${status.id}；目录 ${failedDir}`);
   }
   const releaseId = status.envelope.stamp?.release_id;
   if (!releaseId || (pinnedRelease && releaseId !== pinnedRelease)) {
-    const failedDir = customDir ?? `/tmp/flywheel-report/${safeName(label)}-${safeName(args['release-id'] ?? releaseId ?? 'unbound').slice(0, 15)}`;
+    const failedDir = dirFor(args['release-id'] ?? releaseId ?? 'unbound');
     if (!customDir) await ensureEmpty(failedDir, args.force);
     await persistStage(statusCalls, results, failedDir, token);
     throw new Error(`data_status release_id 缺失或与指定值不一致；证据 ${status.id}；目录 ${failedDir}`);
   }
   const watermark = status.envelope.data?.available_months?.end;
   if (!watermark || end > watermark) throw new Error(`当期窗口 ${end} 越过完整月水位 ${watermark ?? '未知'}`);
-  const runDir = customDir ?? `/tmp/flywheel-report/${safeName(label)}-${safeName(releaseId).slice(0, 15)}`;
+  const runDir = dirFor(releaseId);
   if (!customDir) await ensureEmpty(runDir, args.force);
   context.runDir = runDir; context.releaseId = releaseId;
   console.error(`RUN_DIR=${runDir}`);
   // 续跑时账本按计划顺序整本重建；首跑记下取数口径供续跑核对
+  const runArgs = await startRunArgs(runDir, { ...identity, release_id: releaseId, binding_mode: mode, ...(mode !== 'unbound' ? { manifest_written: Boolean(saved?.manifest) } : {}) }, saved);
   if (args.resume) await writeFile(join(runDir, 'ledger.jsonl'), '');
-  else await writeFile(join(runDir, 'run-args.json'), JSON.stringify({ ...identity, release_id: releaseId }, null, 2) + '\n');
   await persistStage(statusCalls, results, runDir, token);
   const window = { current_start: start, current_end: end };
   await executeStage(client, probes(config, window), context);
@@ -129,10 +158,16 @@ async function prepare(args) {
   const tables = buildTables(config, focuses, results, unlabelled, dependent.selected);
   const windows = g1.envelope.data?.windows ?? {};
   const manifest = buildManifest(config, focuses, sections, tables, dependent.selected, label, releaseId, windows);
+  // Preserve a second declaration in the captured report inputs. Losing the
+  // resumable identity must not silently downgrade a bound run to legacy output.
+  manifest.binding_mode = mode;
+  if (native) { manifest.codex = true; manifest.codex_binding = native.identity; }
+  if (portable) manifest.portable_binding = portable.identity;
   const caveats = unique([...results.values()].sort((left, right) => left.id.localeCompare(right.id)).flatMap((record) => record.envelope ? [...(record.envelope.caveats ?? []), ...(record.envelope.coverage_notes ?? [])] : []));
   await writeArtifacts(runDir, manifest, tables, results, focuses, dataNote(status.envelope, config, label, windows, caveats));
+  if (mode !== 'unbound') await finishRunArgs(runDir, runArgs);
   const errors = [...results.values()].filter((record) => !record.ok).sort((left, right) => left.id.localeCompare(right.id)).map((record) => ({ id: record.id, tool: record.tool, key: record.key, error: record.error }));
-  return { ok: errors.length === 0, run_dir: runDir, release_id: releaseId, label, windows, writer_groups: manifest.writer_groups.map((group) => ({ ...group, slots: group.slots.map((slot) => ({ slot: slot.slot, digest: join(runDir, slot.digest), draft: join(runDir, slot.draft) })) })), calls: context.nextEvidence, errors };
+  return { ok: errors.length === 0, run_dir: runDir, ...(native ? { output_env: native.outputEnv, codex_binding: native.identity.receipt } : {}), ...(portable ? { output_env: portable.outputEnv, portable_binding: portable.identity.receipt } : {}), release_id: releaseId, label, windows, writer_groups: manifest.writer_groups.map((group) => ({ ...group, slots: group.slots.map((slot) => ({ slot: slot.slot, digest: join(runDir, slot.digest), draft: join(runDir, slot.draft) })) })), calls: context.nextEvidence, errors };
 }
 
 async function main() {
@@ -157,10 +192,15 @@ async function main() {
     output = await charts({ runDir: resolve(parsed.values['run-dir']),
       envDir: parsed.values['env-dir'] ? resolve(parsed.values['env-dir']) : undefined,
       python: parsed.values.python, only: parsed.values.only });
+  } else if (command === 'collect') {
+    if (!parsed.values['run-dir'] || !parsed.values['output-env']) throw new Error('collect 必须提供 --run-dir、--output-env');
+    const { collect } = await import('./lib/collect.mjs');
+    output = await collect({ runDir: resolve(parsed.values['run-dir']), outputEnv: await boundOutput(resolve(parsed.values['run-dir']), resolve(parsed.values['output-env'])) });
+    if (!output.ok) process.exitCode = 1;
   } else if (command === 'publish') {
     if (!parsed.values['run-dir'] || !parsed.values['output-env']) throw new Error('publish 必须提供 --run-dir、--output-env');
     const { publish } = await import('./lib/publish.mjs');
-    output = await publish({ runDir: resolve(parsed.values['run-dir']), outputEnv: resolve(parsed.values['output-env']),
+    output = await publish({ runDir: resolve(parsed.values['run-dir']), outputEnv: await boundOutput(resolve(parsed.values['run-dir']), resolve(parsed.values['output-env'])),
       unverified: parsed.values.unverified, resume: Boolean(parsed.values.resume), dryRun: Boolean(parsed.values['dry-run']),
       timeBudget: parsed.values['time-budget'], retryUncertain: Boolean(parsed.values['retry-uncertain']),
       skipUncertain: Boolean(parsed.values['skip-uncertain']) });
