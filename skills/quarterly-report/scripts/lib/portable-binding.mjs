@@ -1,8 +1,9 @@
 // Explicit source pairing and local snapshots only; never reads a host's config.
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
-import { addSecret } from './common.mjs';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { addSecret, validatePortableDirectory } from './common.mjs';
+export { validatePortableDirectory } from './common.mjs';
 import { mcpTokens } from './environment.mjs';
 import { nativeEndpoint } from './codex-binding.mjs';
 
@@ -22,15 +23,6 @@ export function portableEndpoint(value, env = process.env) {
   let endpoint;
   try {
     endpoint = nativeEndpoint(value, env);
-    let decoded = value;
-    for (let depth = 0; depth < 5; depth++) {
-      const next = decodeURIComponent(decoded);
-      if (/[\x00-\x20\x7f?#]/u.test(next) || mcpTokens(env).some((token) => next.includes(token))
-        || /(?:token|secret|password|api[-_]?key|authorization|bearer)[=:/_-]/iu.test(new URL(next).pathname)) throw new Error('unsafe');
-      if (next === decoded) break;
-      decoded = next;
-      if (depth === 4) throw new Error('over-encoded');
-    }
   }
   catch { throw new Error('配对连接地址须为无认证、查询参数、片段或可疑秘密的安全 URL'); }
   const url = new URL(endpoint);
@@ -39,30 +31,13 @@ export function portableEndpoint(value, env = process.env) {
   return endpoint;
 }
 
-// Report targets may be absent, but existing ancestors must be ordinary dirs.
-// Only the two standard macOS OS aliases are accepted.
-export async function validatePortableDirectory(path) {
-  if (!absolute(path)) throw new Error('输出路径须为无控制字符的规范绝对目录');
-  let current = parse(path).root;
-  for (const part of relative(current, path).split('/').filter(Boolean)) {
-    current = join(current, part);
-    let info;
-    try { info = await lstat(current); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
-    if (info.isSymbolicLink()) {
-      const alias = { '/tmp': '/private/tmp', '/var': '/private/var' }[current];
-      if (!alias || await realpath(current) !== alias) throw new Error('输出目录或祖先不得为用户符号链接');
-      current = alias; info = await lstat(current);
-    }
-    if (!info.isDirectory()) throw new Error('输出路径或祖先已存在且不是目录');
-  }
-}
 async function regular(path, privateFile = false) {
   if (!absolute(path) || await realpath(path) !== path) throw new Error('绑定/连接文件或祖先不得为符号链接');
   const info = await lstat(path);
   if (!info.isFile() || info.isSymbolicLink() || (privateFile && ((info.mode & 0o777) !== 0o600 || (process.getuid && info.uid !== process.getuid()))))
     throw new Error('连接文件须为当前用户所有的 0600 普通文件');
 }
-export const osAliasPath = (path) => resolve(path).replace(/^\/tmp(?=\/)/u, '/private/tmp').replace(/^\/var(?=\/)/u, '/private/var');
+export const osAliasPath = (path) => process.platform === 'darwin' ? resolve(path).replace(/^\/tmp(?=\/|$)/u, '/private/tmp').replace(/^\/var(?=\/|$)/u, '/private/var') : resolve(path);
 export async function pairedConnection({ connectionPath = null, env = process.env } = {}) {
   let token, url, source;
   if (connectionPath) {
@@ -70,7 +45,7 @@ export async function pairedConnection({ connectionPath = null, env = process.en
     let content;
     try {
       const path = await realpath(connectionPath);
-      if (osAliasPath(connectionPath) !== path) throw new Error('alias');
+      if (resolve(connectionPath) !== path && osAliasPath(connectionPath) !== path) throw new Error('alias');
       await regular(path, true);
       content = await readFile(path, 'utf8');
       const entries = content.split(/\r?\n/u).filter(Boolean).map((line) => {

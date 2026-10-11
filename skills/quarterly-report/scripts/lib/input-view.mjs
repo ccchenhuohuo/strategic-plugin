@@ -1,30 +1,14 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-import { safeName } from './common.mjs';
+import { join, resolve } from 'node:path';
+import { inputParents, inputPath, safeName } from './common.mjs';
+export { inputParents, inputPath } from './common.mjs';
 
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const sameStat = (a, b) => ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].every((key) => a[key] === b[key]);
 const hash = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
 const ordered = (a, b) => a < b ? -1 : a > b ? 1 : 0;
-
-export function inputPath(path) {
-  if (typeof path !== 'string' || !path || path.startsWith('/') || /[\\\0\r\n]/u.test(path) ||
-      path.split('/').some((part) => !part || part === '.' || part === '..')) throw new Error(`不安全的输入相对路径：${path}`);
-  return path;
-}
-
-export async function inputParents(runDir, path) {
-  inputPath(path);
-  let current = runDir;
-  for (const part of ['', ...dirname(path).split('/').filter((part) => part !== '.')]) {
-    current = part ? join(current, part) : current;
-    let stat;
-    try { stat = await fs.lstat(current); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`输入目录不是普通目录：${current}`);
-  }
-}
 
 export async function assertInputCopy(runDir, path, sha256) {
   await inputParents(runDir, path);
@@ -58,7 +42,7 @@ export function validInputBinding(binding) {
 }
 
 export function chartReferences(text) {
-  return [...new Set([...String(text).matchAll(/!\[[^\]\n]*\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+"[^"\n]*")?\s*\)/gu)]
+  return [...new Set([...String(text).matchAll(/!\[(?:\\[^\n]|[^\\\[\]\n]|\[[^\]\n]*\])*\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+"[^"\n]*")?\s*\)/gu)]
     .map((match) => match[1] ?? match[2]).filter((path) => path.startsWith('charts/')).map(inputPath))];
 }
 

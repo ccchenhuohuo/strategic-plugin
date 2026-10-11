@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { addSecret, redact } from './lib/common.mjs';
+import { addSecret, redact, validatePortableDirectory } from './lib/common.mjs';
 import { mcpTokens } from './lib/environment.mjs';
 import { readNativeDeclaration, saveNativeBinding } from './lib/codex-binding.mjs';
 
@@ -44,11 +44,6 @@ async function optionalFile(path) {
     if (!entry.isFile() || entry.isSymbolicLink()) throw new Error('本地偏好/输出路径必须是普通文件');
     return await readFile(path, 'utf8');
   } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-}
-
-async function reportDirectory(path) {
-  try { if (!(await stat(path)).isDirectory()) throw new Error('report_dir 已存在且不是目录'); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
 
 async function discoverLark(home, env) {
@@ -120,7 +115,7 @@ export async function runLocalSetup(adapter = {}) {
     report_dir: absolutePath(values['report-dir'] ?? saved.report_dir ?? join(home, 'Documents/战略季报'), home, 'report_dir'),
     feishu_output: values['feishu-output'] === undefined ? saved.feishu_output ?? false : values['feishu-output'] === 'true',
   };
-  await reportDirectory(preferences.report_dir);
+  await validatePortableDirectory(preferences.report_dir);
   await adapter.validatePreferences?.(preferences, dataDir);
   // Configuration stdout stays in-process; only whitelisted declarations survive.
   const declaration = command === 'verify' ? await (adapter.declaration ? adapter.declaration(values) : readNativeDeclaration()) : null;

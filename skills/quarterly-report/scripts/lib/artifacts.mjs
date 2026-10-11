@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { asArray, json, safeName, unique, writeArtifact } from './common.mjs';
 import { competitionSegments } from './plan.mjs';
-import { parseMarkdownTable, tableJson, validateTable } from './tables.mjs';
+import { parseMarkdownTable, TABLE_READING_NOTES, tableJson, validateTable } from './tables.mjs';
 import { captureInputs } from './input-view.mjs';
 import { writeRunManifest } from './run-binding.mjs';
 
@@ -34,15 +34,16 @@ export function dataNote(status, config, label, windows, caveats) {
     '',
     `报告期：${label}（${format(windows.current)}）；同比：${format(windows.yoy)}；环比：${format(windows.prior_period)}。`,
     `复现戳：release_id ${stamp.release_id ?? '—'}；build_id ${stamp.build_id ?? '—'}；table_spec ${stamp.table_spec_version ?? '—'}；pipeline ${stamp.pipeline_version ?? '—'}。`,
-    `覆盖站点：${config.sites.map((site) => config.site_labels?.[site] ?? site).join('、')}。平台范围：${data.universe ?? '未提供'}。`,
+    `数据来源：Flywheel 市场估算数据。覆盖站点：${config.sites.map((site) => config.site_labels?.[site] ?? site).join('、')}。平台范围：${data.universe ?? '未提供'}。`,
     `CNY 固定汇率快照：${data.fx_snapshot?.fx_snapshot_id ?? '—'}；${fx}。跨站点及跨期换算使用该 release 冻结的单一汇率，不反映汇率变动。`,
     `类目映射：${mapping.mapping_version ?? '—'}；一级 ${mapping.l1_count ?? '—'}，二级路径 ${mapping.l2_count ?? '—'}，完整三级路径 ${mapping.l3_path_count ?? '—'}。价格带政策：${data.band_policy_version ?? '—'}。`,
     `上游状态：${data.upstream?.status ?? 'unknown'}；上游维表更新可能重述历史类目归属。`,
     '口径警示：销售额、销量和均价均为匹配子集的估算；缺失≠零，未观察、检疫、归档与越界分别处理。',
+    '均价为汇总金额除以估算件数，受商品结构与销量组合影响，不代表同一商品的调价。',
     '跨年同比受匹配池变化影响；商品身份数是匹配子集内有观察的商品身份数，服务商对极低销量长尾有截断，身份数变化仅作旁证。',
     '',
   ];
-  if (caveats.length) lines.push('响应级口径警示：', '', ...caveats.map((item) => `- ${item}`), '');
+  if (caveats.length) lines.push('响应级口径警示：', '', ...unique(caveats).map((item) => `- ${item}`), '');
   return lines.join('\n');
 }
 
@@ -118,13 +119,13 @@ export function buildManifest(config, focuses, sections, tables, selected, label
   return { report_name: config.report_name, label, release_id: releaseId, windows, data_note: 'data-note.md', chapters, writer_groups: groups };
 }
 
-function digestTable(table) { return { id: table.id, title: table.title, columns: table.columns, rows: table.rows }; }
+function digestTable(table) { return { id: table.id, title: table.title, columns: table.columns, rows: table.rows, footer: table.footer ?? [], ...(table.observation_context?.length ? { observation_context: table.observation_context } : {}) }; }
 function projected(table, columns, rows) {
   const output = { ...table, columns, rows, footer: [], allowed_numbers: unique(rows.flat().filter((entry) => typeof entry === 'string' && /^[+\-−]?\d/.test(entry)).map((entry) => entry.replaceAll('−', '-').replaceAll(',', ''))) };
   return output;
 }
 function summaryTables(slot, tables, focuses) {
-  if (slot === 'exec.global') return ['2.1a', '2.1b', '2.2'].map((id) => tables.get(id)).filter((table) => table?.status === 'ok');
+  if (slot === 'exec.global') return ['2.1a', '2.1b', '2.2'].map((id) => tables.get(id)).filter(Boolean);
   const focus = focuses.find((item) => slot === `exec.focus.${item.std_l1}`);
   if (!focus) return [];
   const n = focus.section_no, trend = tables.get(`${n}.1a`), band = tables.get(`${n}.2a`);
@@ -156,13 +157,15 @@ export async function writeArtifacts(runDir, manifest, tables, results, focuses,
   const byEvidence = new Map([...results.values()].map((record) => [record.id, record]));
   for (const chapter of manifest.chapters) for (const slot of chapter.slots) {
     const listed = slotTables(slot.slot, manifest, tables, focuses).filter(Boolean);
-    const evidence = unique(listed.flatMap((table) => table.evidence));
+    const focus = focuses.find((item) => slot.slot === `exec.focus.${item.std_l1}`);
+    const related = focus ? manifest.chapters.find((item) => item.id === `sec${focus.section_no}`).tables.map((item) => tables.get(item.table_id)) : listed;
+    const evidence = unique(related.flatMap((table) => table.evidence));
     const caveats = evidence.flatMap((id) => {
       const envelope = byEvidence.get(id)?.envelope;
       return [...asArray(envelope?.caveats), ...asArray(envelope?.coverage_notes)];
     });
-    const notes = unique([...listed.flatMap((table) => table.notes), ...listed.map((table) => table.reason).filter(Boolean), ...caveats]);
-    const digest = { slot: slot.slot, title: slot.title, window: { label: manifest.label, current: manifest.windows.current ?? null, yoy: manifest.windows.yoy ?? null, prior_period: manifest.windows.prior_period ?? null }, tables: listed.map(digestTable), notes, statuses: listed.map((table) => ({ table: table.id, status: table.status, ...(table.reason ? { reason: table.reason } : {}) })), allowed_numbers: unique(listed.flatMap((table) => table.allowed_numbers)) };
+    const notes = unique([...related.flatMap((table) => table.notes), ...related.map((table) => table.reason).filter(Boolean), ...caveats]);
+    const digest = { slot: slot.slot, title: slot.title, window: { label: manifest.label, current: manifest.windows.current ?? null, yoy: manifest.windows.yoy ?? null, prior_period: manifest.windows.prior_period ?? null }, tables: listed.map(digestTable), notes, statuses: related.map((table) => ({ table: table.id, status: table.status, ...(table.reason ? { reason: table.reason } : {}) })), allowed_numbers: unique([...listed.flatMap((table) => table.allowed_numbers), ...related.flatMap((table) => asArray(table.observation_context).map((item) => item.months_observed_display).filter((text) => typeof text === 'string'))]) };
     await writeArtifact(runDir, slot.digest, json(digest));
   }
   // Preserve the complete previous identity if the final manifest commit fails.
@@ -179,14 +182,44 @@ export function readViewTable(view, metadata) {
   return table;
 }
 
+/** Reader-facing context; detailed provenance stays in the appendix. */
+export function reportContext(view) {
+  const manifest = view.json('manifest.json'), windows = manifest.windows ?? {};
+  const periods = [['报告期', windows.current], ['同比', windows.yoy], ['环比', windows.prior_period]]
+    .filter(([, window]) => window?.start && window?.end).map(([name, window]) => `${name}：${window.start} 至 ${window.end}`);
+  const ledger = view.text('ledger.jsonl').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
+  const caveats = [];
+  let upstream = null;
+  for (const record of ledger.filter((item) => item.ok)) {
+    const envelope = view.json(`evidence/${record.id}.json`).envelope;
+    if (!upstream && record.tool === 'strategic_data_status') upstream = envelope?.data?.upstream;
+    caveats.push(...asArray(envelope?.caveats), ...asArray(envelope?.coverage_notes));
+  }
+  const stale = upstream?.status === 'stale' || caveats.some((text) => ['当前 release 落后于上游', '上游类目维表已于', '服务商宽表已于'].some((prefix) => text.includes(prefix)));
+  const unknown = upstream?.status !== 'current' || caveats.some((text) => text.includes('无法判定上游是否已更新'));
+  const lines = periods.length ? [`${periods.join('；')}。`] : [];
+  if (stale) lines.push(`阅读提示：数据尚未跟进上游最新更新，历史分类可能调整${upstream?.release_built_on?.derived ? `；本报告基于 ${upstream.release_built_on.derived} 的样本` : ''}。详细说明见附录。`);
+  else if (unknown) lines.push('阅读提示：数据是否已跟进上游最新更新尚未确认，结论以本报告收录的样本为限。');
+  return { intro: lines.join('\n\n'), ledger, caveats: unique(caveats) };
+}
+
+export function evidenceReferences(manifest, charts) {
+  const references = new Map();
+  const sources = [...manifest.chapters.flatMap((chapter) => chapter.tables.map((table) => ({ label: `${table.table_id} ${table.title}`, evidence: table.evidence }))),
+    ...charts.filter((chart) => chart.status === 'ok').map((chart) => ({ label: chart.caption, evidence: chart.evidence }))];
+  for (const source of sources) for (const id of asArray(source.evidence)) references.set(id, unique([...(references.get(id) ?? []), source.label]));
+  return references;
+}
+
 /** Pure rendering: every byte comes from the supplied input view. */
 export function renderReport(view) {
   const manifest = view.json('manifest.json');
+  const { intro, ledger, caveats } = reportContext(view);
   let charts = [];
   try { charts = asArray(view.json('charts/index.json').charts); }
   // Optional output can be interrupted midway; check records a warning for a bad index.
   catch { charts = []; }
-  const lines = [`# ${manifest.report_name} - ${manifest.label}`, '', view.text(manifest.data_note).trimEnd(), ''];
+  const lines = [`# ${manifest.report_name} - ${manifest.label}`, '', intro, ''];
   for (const chapter of manifest.chapters) {
     lines.push(`## ${chapter.title}`, '');
     for (const block of chapter.blocks) {
@@ -195,9 +228,11 @@ export function renderReport(view) {
       } else if (block.type === 'table') {
         const table = chapter.tables.find((item) => item.table_id === block.id);
         for (const chart of charts.filter((item) => item.status === 'ok' && item.before_table === block.id)) {
-          lines.push(`![${chart.caption}](charts/${chart.file})`, chart.caption, `证据：${chart.evidence.join('、')}`, '');
+          const alt = String(chart.caption).replace(/[\\\[\]]/gu, '\\$&');
+          lines.push(`![${alt}](charts/${chart.file})`, chart.caption, '');
         }
-        lines.push(view.text(table.path).trimEnd(), '');
+        const markdown = view.text(table.path).split('\n').filter((line) => !line.startsWith('证据：') && !TABLE_READING_NOTES.some((note) => line === `表注：${note}`)).join('\n');
+        lines.push(markdown.trimEnd(), '');
       } else {
         const slot = chapter.slots.find((item) => item.slot === block.id);
         lines.push(`### ${slot.title}`, '');
@@ -206,16 +241,12 @@ export function renderReport(view) {
       }
     }
   }
-  const ledger = view.text('ledger.jsonl').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
-  lines.push('## 附录：证据账本与口径警示', '', '| 证据 | 工具 | query_id | release_id | 状态 |', '| --- | --- | --- | --- | --- |');
-  for (const record of ledger) lines.push(`| ${record.id} | ${record.tool} | ${record.query_id ?? '—'} | ${record.release_id ?? '—'} | ${record.ok ? 'ok' : record.error?.message ?? 'failed'} |`);
+  const note = view.text(manifest.data_note).trimEnd(), references = evidenceReferences(manifest, charts);
+  lines.push('## 附录：数据说明与溯源', '', note.replace(/^## /u, '### '), '', ...TABLE_READING_NOTES, '',
+    '### 证据账本', '', '| 证据 | 对应图表 | 工具 | query_id | release_id | 状态 |', '| --- | --- | --- | --- | --- | --- |');
+  for (const record of ledger) lines.push(`| ${[record.id, (references.get(record.id) ?? []).join('；') || '—', record.tool, record.query_id ?? '—', record.release_id ?? '—', record.ok ? 'ok' : record.error?.message ?? 'failed'].map(safeMd).join(' | ')} |`);
   lines.push('');
-  const caveats = [];
-  for (const record of ledger.filter((item) => item.ok)) {
-    const evidence = view.json(`evidence/${record.id}.json`);
-    caveats.push(...asArray(evidence.envelope?.caveats), ...asArray(evidence.envelope?.coverage_notes));
-  }
-  lines.push(...unique(caveats).map((item) => `- ${item}`), '');
+  lines.push(...caveats.filter((item) => !note.includes(item)).map((item) => `- ${item}`), '');
   return lines.join('\n');
 }
 

@@ -165,8 +165,10 @@ def bubble_panel(fig, ax, points, kind, attempt=0, title=None, reference=None, y
     fontsize = 9.8 if kind == 'brand_bubble' else (9.1 if kind == 'segment_matrix' else 10.2)
     metrics = [measure(fig, point['label'], fontsize) for point in points]
     xs, ys = [number(p['x']) for p in points], [number(p['y']) for p in points]
-    data_min, data_max = min(xs+[0]), max(xs+[1])
-    middle = (data_min+data_max)/2
+    reference_x = [number(reference['median']['value'])] if reference else []
+    reference_y = [number(reference['growth']['value'])] if reference else []
+    data_min, data_max = min(xs+[0]+reference_x), max(xs+[1]+reference_x)
+    middle = (min(xs+[0])+max(xs+[1]))/2
     sides = ['left' if x <= middle else 'right' for x in xs]
     # Both columns must accommodate a label changing sides without changing
     # data coordinates mid-search. Width comes from real glyph extents.
@@ -194,8 +196,10 @@ def bubble_panel(fig, ax, points, kind, attempt=0, title=None, reference=None, y
         return False
     scale = max(data_max-data_min, 1)/(dataright-dataleft)
     ax.set_xlim(data_min-(dataleft-bbox.x0)*scale, data_max+(bbox.x1-dataright)*scale)
-    bottom, top = min(ys+[0]), max(ys+[0])
+    bottom, top = min(ys+[0]+reference_y), max(ys+[0]+reference_y)
     span = max(top-bottom, 1)
+    if reference and ylimits is not None:
+        ylimits = (min(ylimits[0], bottom-span*.20), max(ylimits[1], top+span*.20))
     ax.set_ylim(*(ylimits if ylimits is not None else (bottom-span*.20, top+span*.20)))
     axes_style(ax, 'share' if kind == 'brand_bubble' else 'money', 'pp' if kind == 'brand_bubble' else 'percent')
     ticks = MaxNLocator(nbins=3 if kind == 'segment_matrix' else 5).tick_values(data_min, data_max)

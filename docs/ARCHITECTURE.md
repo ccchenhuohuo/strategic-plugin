@@ -1,6 +1,6 @@
-# Strategic Analytics 0.3.2 的共同核心
+# Strategic Analytics 的共同核心
 
-本文描述正式版 0.3.2 的实际架构。本轮范围：Codex 完整合成季报执行与恢复验收；Claude Code 安装、声明和钩子验证，未执行模型；WorkBuddy 依据官方插件文档提供同包接入引导，未做实机验证。结果见 [0.3.2 验收范围](ACCEPTANCE-0.3.2.md)。
+本文描述 0.3.3 的实际架构。共同核心沿用 0.3.2，最新验收事实和客户端边界见 [0.3.3 验收范围](ACCEPTANCE-0.3.3.md)，此前安装与执行记录见 [0.3.2 验收范围](ACCEPTANCE-0.3.2.md)。
 
 ## 一份 package 的实际关系
 
@@ -111,7 +111,7 @@ collect/publish（含直接 API）核对本次冻结 output_env，离线收录�
 `agents/report-*.md` 为 Claude 同源兼容投影，`workflows/quarterly-report.js` 保留原有限恢复、防重放与 finally 门禁。
 CodeBuddy 是 setup 的小型接入别名，CLI 结果不能冒充 WorkBuddy GUI。
 
-维护仓库从 CORE 与 REPORT 生成分析工作区指引；分发包中完整规则在共同 Skill，README 给出 AGENTS.md / CLAUDE.md 的薄加载指令。
+给分析工作区的运行指引为生成的 `methodology/dist/AGENTS.md` / `CLAUDE.md`，从 CORE 与 REPORT 共同生成。
 宿主不自动加载时显式读取；不宣称小写单数 agent.md 在三个客户端自动生效。
 手工接入必须保留完整 Skill 所在包的 references/scripts/config，脚本从实际已加载 Skill 文件定位，不猜安装缓存。
 

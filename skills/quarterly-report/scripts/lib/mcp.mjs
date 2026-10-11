@@ -73,7 +73,7 @@ function decodeRpc(body, contentType, id) {
     const data = event.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart()).join('\n');
     if (data && data !== '[DONE]') messages.push(JSON.parse(data));
   }
-  return messages.find((message) => message?.id === id) ?? messages.at(-1) ?? null;
+  return messages.find((message) => message?.jsonrpc === '2.0' && message.id === id) ?? null;
 }
 
 export class McpClient {
@@ -103,7 +103,10 @@ export class McpClient {
         let rpc;
         try { rpc = decodeRpc(body, response.headers.get('content-type') ?? '', id); }
         catch { throw Object.assign(new Error('MCP 响应不是有效 JSON/SSE'), { retryable: false }); }
-        if (!rpc) throw Object.assign(new Error('MCP 响应为空'), { retryable: false });
+        if (!rpc || rpc.jsonrpc !== '2.0' || rpc.id !== id ||
+            Object.hasOwn(rpc, 'result') === Object.hasOwn(rpc, 'error') ||
+            (Object.hasOwn(rpc, 'error') && (!rpc.error || !Number.isInteger(rpc.error.code) || typeof rpc.error.message !== 'string')))
+          throw Object.assign(new Error('MCP 响应缺少当前请求的有效 JSON-RPC 2.0 result/error'), { retryable: false });
         if (rpc.error) throw Object.assign(new Error(rpc.error.message ?? 'MCP RPC 错误'), { code: rpc.error.code, retryable: false });
         return rpc.result;
       } catch (error) {

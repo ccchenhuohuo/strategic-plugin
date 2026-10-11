@@ -90,7 +90,7 @@ const CHECK_SCHEMA = {
     report: { type: 'string' },
     blocking: { type: 'array', items: { type: 'object', properties: { slot: { type: 'string' }, type: { type: 'string' }, detail: { type: 'string' }, excerpt: { type: 'string' } }, required: ['type', 'detail'] } },
     warnings: { type: 'number' },
-    exit_code: { type: 'number' },
+    exit_code: { type: 'number' }, review_saved: { type: 'boolean' },
   },
   required: ['ok', 'blocking'],
 }
@@ -190,47 +190,54 @@ const summaryGroup = prep.groups.find((group) => group.id === 'summary')
 log(`release ${prep.release_id}：${prep.calls ?? '?'} 次调用，${prep.errors.length} 个取数错误；${sectionGroups.length} 个章节写作组`)
 if (prep.errors.length) log(`取数错误（相关表位已标记，写作照常）：${prep.errors.slice(0, 5).join('；')}${prep.errors.length > 5 ? ' …' : ''}`)
 
-// ── 2. 分章写作：写 → 核查 → 有问题重写一次（各组独立推进，不等其他组）───────
-const sectionResults = await pipeline(
-  sectionGroups,
-  (group) => agent(writePrompt(runDir, group.slots), { label: `写:${group.id}`, phase: '分章写作', agentType: WRITER, schema: WRITE_SCHEMA }),
-  (written, group) => agent(verifyPrompt(runDir, group.slots), { label: `核:${group.id}`, phase: '分章写作', agentType: VERIFIER, schema: ISSUES_SCHEMA })
-    .then((review) => ({ group, written, issues: review ? review.issues : [], unverified: !review })),
-  (state) => state.issues.length
-    ? agent(writePrompt(runDir, state.group.slots, state.issues), { label: `改:${state.group.id}`, phase: '分章写作', agentType: WRITER, schema: WRITE_SCHEMA })
-      .then(() => ({ ...state, revised: true }))
-    : { ...state, revised: false },
-)
-const reviewed = sectionResults.filter(Boolean)
-const missingGroups = sectionGroups.filter((group) => !reviewed.some((state) => state.group.id === group.id)).map((group) => group.id)
-if (missingGroups.length) log(`以下写作组未完成（将在校验中显示为待补写）：${missingGroups.join('、')}`)
-// 核查员未返回（中断或达到轮数上限）不等于没有问题：记下来随结果交人工，不当作核查通过。
-const unverifiedGroups = reviewed.filter((state) => state.unverified).map((state) => state.group.id)
-if (unverifiedGroups.length) log(`以下写作组的语义核查未返回，未经对抗核查：${unverifiedGroups.join('、')}`)
-
-// ── 3. 执行摘要（依赖全部章节叙述）──────────────────────────────────────────
-let summaryIssues = []
-if (summaryGroup && summaryGroup.slots.length) {
-  phase('执行摘要')
-  // 写手只有 Read/Write、列不出目录，所以各章成稿逐个给出完整路径（2026-09-30 生产全量运行时只给目录，写手一篇没读）。
-  const chapterDrafts = sectionGroups.flatMap((group) => group.slots).map((slot) => `- ${runDir}/drafts/${slot}.md`)
-  await agent([
-    writePrompt(runDir, summaryGroup.slots),
-    '',
-    '各章成稿如下，动笔前逐个用 Read 读取（不存在的跳过），只用来把握各章重点与结论方向；数字只取执行摘要自己的摘要文件，不从成稿里抄：',
-    ...chapterDrafts,
-  ].join('\n'), { label: '写:summary', phase: '执行摘要', agentType: SUMMARY, schema: WRITE_SCHEMA })
-  const review = await agent(verifyPrompt(runDir, summaryGroup.slots), { label: '核:summary', phase: '执行摘要', agentType: VERIFIER, schema: ISSUES_SCHEMA })
-  summaryIssues = review ? review.issues : []
-  if (!review) {
-    unverifiedGroups.push(summaryGroup.id)
-    log('执行摘要的语义核查未返回，未经对抗核查')
-  }
-  if (summaryIssues.length) {
-    await agent(writePrompt(runDir, summaryGroup.slots, summaryIssues), { label: '改:summary', phase: '执行摘要', agentType: SUMMARY, schema: WRITE_SCHEMA })
-  }
+// 每位合计只重写一次；任何写入先撤销上一稿的核查归属。
+const rewritten = new Set()
+const reviews = new Map(prep.groups.map((group) => [group.id, { group, issues: [], unverified: true }]))
+const reviewGroup = async (group, final = false) => {
+  const state = reviews.get(group.id)
+  state.unverified = true
+  const review = await agent(verifyPrompt(runDir, group.slots), { label: `核:${group.id}${final ? ':final' : ''}`, phase: group.id === 'summary' ? '执行摘要' : '分章写作', agentType: VERIFIER, schema: ISSUES_SCHEMA })
+  state.issues = review && Array.isArray(review.issues) ? review.issues : []
+  state.unverified = !review || !Array.isArray(review.issues)
+  if (state.unverified) log(`${group.id === 'summary' ? '执行摘要的' : `以下写作组 ${group.id} 的`}语义核查未返回，未经对抗核查：${group.id}`)
 }
+const rewrite = async (group, slots, issues, label) => {
+  const eligible = slots.filter((slot) => !rewritten.has(slot))
+  if (!eligible.length) return false
+  reviews.get(group.id).unverified = true
+  eligible.forEach((slot) => rewritten.add(slot))
+  await agent(writePrompt(runDir, eligible, issues.filter((issue) => eligible.includes(issue.slot))), { label, phase: '修订', agentType: group.id === 'summary' ? SUMMARY : WRITER, schema: WRITE_SCHEMA })
+  await reviewGroup(group, true)
+  return true
+}
+const semanticRevision = async (group) => {
+  const issues = reviews.get(group.id).issues
+  if (issues.length) await rewrite(group, [...new Set(issues.map((issue) => issue.slot))].filter((slot) => group.slots.includes(slot)), issues, `改:${group.id}`)
+}
+// 不同章节各写独立文件，保留原有并行推进；组内核查与修订按顺序执行。
+await pipeline(sectionGroups,
+  (group) => agent(writePrompt(runDir, group.slots), { label: `写:${group.id}`, phase: '分章写作', agentType: WRITER, schema: WRITE_SCHEMA }),
+  async (_written, group) => {
+    await reviewGroup(group)
+    await semanticRevision(group)
+    return reviews.get(group.id)
+  },
+)
 
+// 复用 runner 的核查/收录步骤保存最终问题与草稿、摘要哈希，不新增脚本子命令。
+const reviewCommand = () => `node -e ${shellQuote(`
+const fs = require('node:fs'), crypto = require('node:crypto');
+const path = require('node:path'), dir = ${JSON.stringify(runDir)};
+const record = ${JSON.stringify({ groups: [...reviews.values()].map(({ group, issues, unverified }) => ({ id: group.id, slots: group.slots, issues, unverified, rewritten: group.slots.filter((slot) => rewritten.has(slot)) })) })};
+for (const group of record.groups) group.inputs = group.unverified ? [] : group.slots.map(slot => {
+  const hash = kind => crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, kind, slot + (kind === 'drafts' ? '.md' : '.json')))).digest('hex');
+  return { slot, draft_sha256: hash('drafts'), digest_sha256: hash('digests') };
+});
+const temporary = path.join(dir, '.' + crypto.randomUUID() + '.review.tmp');
+try { fs.writeFileSync(temporary, JSON.stringify(record, null, 2) + '\\n', {flag:'wx', mode:0o600}); fs.renameSync(temporary, path.join(dir, 'review.json')); }
+finally { fs.rmSync(temporary, {force:true}); }
+console.log(JSON.stringify({review_saved:true}));
+`)}`
 // ── 4. 组装与机械校验 ────────────────────────────────────────────────────────
 const runCheck = async (label, phaseName) => {
   const result = await agent([
@@ -240,9 +247,10 @@ const runCheck = async (label, phaseName) => {
   `node "<你的说明里给出的 report.mjs 路径>" check --run-dir ${runArg}`,
   '',
   '按 check 命令标准输出最后一行的 JSON 返回：ok、blocking（每项的 slot/table、type、detail、excerpt）、warnings（数量）、',
-  'exit_code，report 取 assemble 最后一行 JSON 的 report 字段。不要修改任何文件。',
+  'exit_code，report 取 assemble 最后一行 JSON 的 report 字段。再执行以下单条 node 命令保存本轮语义核查记录（仅写 review.json），成功时 review_saved=true；失败如实返回 false，不改其他材料。',
+  reviewCommand(),
   ].join('\n'), { label, phase: phaseName, agentType: RUNNER, schema: CHECK_SCHEMA })
-  if (result && !Array.isArray(result.blocking)) throw new TypeError('校验 Agent 未返回有效阻断列表')
+  if (!result || !Array.isArray(result.blocking)) throw new TypeError('校验 Agent 未返回有效阻断列表')
   return result
 }
 
@@ -271,30 +279,47 @@ try {
   phase('校验')
   check = await runCheck('assemble+check', '校验')
 
-  // ── 5. 修订：机械校验阻断的叙述位重写一次，再校验 ───────────────────────────
-  const blockingSlots = (result) => [...new Set((result && result.blocking ? result.blocking : []).map((item) => item.slot).filter(Boolean))]
-  const toFix = blockingSlots(check).filter((slot) => !slot.startsWith('table'))
-  if (check && !check.ok && toFix.length) {
-    stage = 'rewrite'
-    phase('修订')
-    const bySlot = (slot) => check.blocking.filter((item) => item.slot === slot).map((item) => ({ slot, type: item.type, reason: item.detail, excerpt: item.excerpt }))
-    const isSummarySlot = (slot) => Boolean(summaryGroup && summaryGroup.slots.includes(slot))
-    const summarySlots = toFix.filter(isSummarySlot)
-    const sectionSlots = toFix.filter((slot) => !isSummarySlot(slot))
-    // parallel 的运行时可能吞掉子任务拒绝；显式记录错误，等本轮任务结束后停止校验与发布。
-    const revisionErrors = []
-    const revision = (prompt, options) => async () => {
-      try { return await agent(prompt, options) }
-      catch (error) { revisionErrors.push(error); return null }
+  // 章节先结束机械修订，再生成执行摘要。缺少摘要的阻断在此阶段保留。
+  const mechanicalRevision = async (groups) => {
+    let changed = false
+    for (const group of groups) {
+      const issues = (check?.blocking ?? []).filter((item) => group.slots.includes(item.slot))
+        .map((item) => ({ slot: item.slot, type: item.type, reason: item.detail, excerpt: item.excerpt }))
+      const slots = [...new Set(issues.map((item) => item.slot))]
+      if (slots.some((slot) => !rewritten.has(slot))) {
+        stage = 'rewrite'
+        phase('修订')
+        changed = await rewrite(group, slots, issues, group.id === 'summary' ? '修:summary' : `修:${slots[0]}`) || changed
+      }
     }
-    await parallel([
-      ...sectionSlots.map((slot) => revision(writePrompt(runDir, [slot], bySlot(slot)), { label: `修:${slot}`, phase: '修订', agentType: WRITER, schema: WRITE_SCHEMA })),
-      ...(summarySlots.length ? [revision(writePrompt(runDir, summarySlots, summarySlots.flatMap(bySlot)), { label: '修:summary', phase: '修订', agentType: SUMMARY, schema: WRITE_SCHEMA })] : []),
-    ])
-    if (revisionErrors.length) throw revisionErrors[0]
+    return changed
+  }
+  if (await mechanicalRevision(sectionGroups)) {
     stage = 're-check'
     check = await runCheck('re-check', '修订')
   }
+  if (summaryGroup && summaryGroup.slots.length) {
+    stage = 'summary'
+    phase('执行摘要')
+    const chapterDrafts = sectionGroups.flatMap((group) => group.slots).map((slot) => `- ${runDir}/drafts/${slot}.md`)
+    await agent([
+      writePrompt(runDir, summaryGroup.slots), '',
+      '各章成稿如下，动笔前逐个用 Read 读取（不存在的跳过），只用来把握各章重点与结论方向；数字只取执行摘要自己的摘要文件，不从成稿里抄：',
+      ...chapterDrafts,
+    ].join('\n'), { label: '写:summary', phase: '执行摘要', agentType: SUMMARY, schema: WRITE_SCHEMA })
+    await reviewGroup(summaryGroup)
+    await semanticRevision(summaryGroup)
+    stage = 'final-check'
+    check = await runCheck('final-check', '校验')
+    if (await mechanicalRevision([summaryGroup])) {
+      stage = 're-check'
+      check = await runCheck('re-check', '修订')
+    }
+  }
+  const finalStates = [...reviews.values()]
+  const unverifiedGroups = finalStates.filter((state) => state.unverified || state.issues.length || check?.review_saved !== true).map((state) => state.group.id)
+  if (check?.review_saved !== true) log('最终核查记录未保存，核查归属未验证')
+  for (const state of finalStates.filter((item) => item.issues.length)) log(`最终语义问题 ${state.group.id}：${issueText(state.issues)}`)
 
   const remaining = check ? check.blocking : [{ type: 'check_failed', detail: '校验 Agent 未返回' }]
   if (remaining.length) log(`仍有 ${remaining.length} 个阻断问题，报告里保留标记，需人工处理`)
@@ -358,7 +383,9 @@ try {
       '',
       `node "<你的说明里给出的 report.mjs 路径>" collect --run-dir ${runArg} --output-env ${outputArg}`,
       '',
-      '机械校验未通过、Agent 异常、用户取消、飞书未开启或同步失败时也执行本地收录，不再发布。读取最后一行 JSON，原样返回 ok、dir、report、index、error。',
+      '收录后保存当前核查归属（含异常后失效的核查）：',
+      reviewCommand(),
+      '机械校验未通过、Agent 异常、用户取消、飞书未开启或同步失败时也执行本地收录，不再发布。以 collect 命令的最后一行 JSON 为准，原样返回 ok、dir、report、index、error；保存核查记录的 JSON 不替代 collect 的结果，保存失败也如实回报。',
       '命令失败或没有 JSON 时返回 ok=false，error 放退出码与最后 20 行输出。report.md 尚未生成时如实返回失败；不得生成报告或宣称已收录。',
     ].join('\n'), { label: 'collect', phase: '收录', agentType: RUNNER, schema: COLLECT_SCHEMA })
     if (collected && typeof collected.ok === 'boolean' && (!collected.ok || ['dir', 'report', 'index'].every((key) => typeof collected[key] === 'string' && collected[key]))) library = {
@@ -385,9 +412,11 @@ return {
   calls: prep.calls,
   fetch_errors: prep.errors,
   groups: sectionGroups.length + (summaryGroup ? 1 : 0),
-  revised_groups: reviewed.filter((state) => state.revised).map((state) => state.group.id),
-  verifier_issues: reviewed.reduce((total, state) => total + state.issues.length, 0) + summaryIssues.length,
-  unverified_groups: unverifiedGroups,
+  revised_groups: [...reviews.values()].filter((state) => state.group.slots.some((slot) => rewritten.has(slot))).map((state) => state.group.id),
+  verifier_issues: [...reviews.values()].reduce((total, state) => total + state.issues.length, 0),
+  review_saved: check?.review_saved === true && !workflowError,
+  semantic_issues: [...reviews.values()].flatMap((state) => state.issues.map((issue) => ({ group: state.group.id, ...issue }))),
+  unverified_groups: [...reviews.values()].filter((state) => state.unverified || state.issues.length || check?.review_saved !== true).map((state) => state.group.id),
   blocking: remaining,
   warnings: check ? check.warnings : null,
   charts,

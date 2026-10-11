@@ -1,6 +1,6 @@
 import { appendFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { clean, digest, eid, json, unique, writeArtifact } from './common.mjs';
+import { clean, digest, eid, json, safeName, unique, writeArtifact } from './common.mjs';
 
 const GROWTH = 'strategic_market_growth';
 const PRICE = 'strategic_price_band_distribution';
@@ -9,6 +9,18 @@ const PRODUCT = 'strategic_product_rank';
 const METRICS = ['amt_discount', 'units_est', 'weighted_discount_price'];
 
 export function selectedFocus(config, sections) {
+  // 在 prepare 的现有配置入口拒绝不可区分的派生文件名，保留旧命名。
+  const uniqueNames = (names, kind) => {
+    if (new Set(names.map(safeName)).size !== names.length) throw new Error(`配置${kind}产生相同派生文件路径`);
+  };
+  uniqueNames(config.focus.map((focus) => `exec.focus.${focus.std_l1}`), '摘要位');
+  uniqueNames(config.focus.map((focus) => `s${focus.section_no}`), '章节位');
+  uniqueNames(config.sites, '站点');
+  for (const focus of config.focus) {
+    const segments = competitionSegments(focus);
+    uniqueNames(segments.map((segment) => segment.label), '竞争分段');
+    uniqueNames(segments.flatMap((segment) => config.sites.map((site) => `${focus.section_no}.3.${segment.label}.${site}.brand`)), '竞争表位');
+  }
   if (!sections) return config.focus;
   return config.focus.filter((focus) => sections.includes(focus.section_no));
 }
@@ -138,7 +150,7 @@ export async function executeStage(client, stage, context) {
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, numbered.length) }, () => worker()));
-  if (runDir) await persistStage(numbered, results, runDir, secret);
+  if (runDir) await persistStage(numbered, results, runDir, secret, false);
   return numbered;
 }
 
@@ -150,15 +162,15 @@ async function writeEvidence(runDir, record, secret) {
 async function reusableEvidence(runDir, call, args) {
   let saved;
   try { saved = JSON.parse(await readFile(join(runDir, `evidence/${call.id}.json`), 'utf8')); }
-  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  if (!saved.ok || saved.tool !== call.tool || digest(saved.arguments) !== digest(args)) return null;
+  catch (error) { if (error.code === 'ENOENT' || error instanceof SyntaxError) return null; throw error; }
+  if (!saved?.ok || saved.id !== call.id || saved.tool !== call.tool || !saved.arguments || digest(saved.arguments) !== digest(args) || !saved.envelope?.stamp?.release_id || saved.envelope.stamp.release_id !== args.release_id) return null;
   return { id: saved.id, tool: saved.tool, arguments: saved.arguments, ok: true, envelope: saved.envelope, called_at: saved.called_at };
 }
 
-export async function persistStage(numbered, results, runDir, secret) {
+export async function persistStage(numbered, results, runDir, secret, writeFiles = true) {
   for (const call of numbered) {
     const record = results.get(call.key);
-    await writeEvidence(runDir, record, secret);
+    if (writeFiles) await writeEvidence(runDir, record, secret);
     const line = { id: record.id, tool: record.tool, arguments_digest: digest(record.arguments), ok: record.ok, query_id: record.envelope?.stamp?.query_id ?? null, release_id: record.envelope?.stamp?.release_id ?? null, error: record.error ?? null };
     await appendFile(join(runDir, 'ledger.jsonl'), JSON.stringify(clean(line, secret)) + '\n');
   }

@@ -196,6 +196,7 @@ export async function runChartProcess(command, args, { env = process.env, cwd, t
       try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); } catch { child.kill('SIGKILL'); }
     }, Math.max(1, timeout));
     const complete = (value) => { if (settled) return; settled = true; clearTimeout(timer); done(value); };
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => { stdout = (stdout + chunk).slice(-1000000); });
     child.stderr.on('data', (chunk) => { errors = (errors + chunk).slice(-1000000); if (stderr) process.stderr.write(redact(String(chunk))); });
     child.once('error', (error) => complete({ code: null, stdout, stderr: errors, error: error.message, timedOut }));
@@ -214,6 +215,7 @@ async function lockRequirements(lockPath) {
   return { entries, hash: createHash('sha256').update(lock).digest('hex') };
 }
 async function probePython(python, lock, env, remaining) {
+  if (remaining <= 0) return { ok: false, reason: '图表环境校验超时' };
   const code = `import sys,json,importlib,importlib.metadata\nrequirements=json.loads(${JSON.stringify(JSON.stringify(lock.entries))})\nversions={}\nfor item in requirements:\n importlib.import_module(item['module'])\n versions[item['name']]=importlib.metadata.version(item['name'])\n if versions[item['name']]!=item['version']: raise RuntimeError(item['name']+' 版本 '+versions[item['name']]+' 不符合锁定 '+item['version'])\nif sys.version_info[:2] not in ((3,12),(3,13)): raise RuntimeError('Python 版本须为 3.12 或 3.13')\nprint(json.dumps({'python':sys.version.split()[0],'matplotlib':versions['matplotlib'],'packages':versions}))`;
   const result = await runChartProcess(python, ['-B', '-c', code], { env, timeout: Math.min(30000, remaining) });
   if (result.code !== 0) return { ok: false, reason: result.timedOut ? '图表环境校验超时' : `图表环境不可用：${result.error ?? result.stderr.trim().split('\n').at(-1) ?? '解释器无法运行'}` };
@@ -300,8 +302,9 @@ export async function prepareChartEnvironment({ runDir, envDir, python, env = pr
   finally { await rm(temporary, { recursive: true, force: true }); if (held) await rm(lockDir, { recursive: true, force: true }); }
 }
 
-export async function charts({ runDir, envDir, python, only } = {}) {
+export async function charts({ runDir, envDir, python, only, deadlineMs = 540000 } = {}) {
   if (!runDir) throw new Error('charts 必须提供 --run-dir');
+  const deadline = Date.now() + deadlineMs, remaining = () => Math.max(0, deadline - Date.now() - Math.min(5000, deadlineMs / 10));
   runDir = resolve(runDir);
   const fullSpecs = await buildChartSpecs(runDir);
   const specs = { ...fullSpecs, charts: fullSpecs.charts };
@@ -311,16 +314,23 @@ export async function charts({ runDir, envDir, python, only } = {}) {
     specs.charts = specs.charts.filter((chart) => selected.includes(chart.id));
   }
   const output = join(runDir, 'charts');
-  let previous = null;
+  let previous = null, previousSpecs = null;
+  const retained = new Map();
   if (only !== undefined) {
     try {
       previous = await readJson(join(output, 'index.json'));
       if (previous.version !== 1 || !Array.isArray(previous.charts) || previous.label !== specs.label || previous.release_id !== specs.release_id || new Set(previous.charts.map((chart) => chart.id)).size !== previous.charts.length) throw new Error('index.json 格式或报告绑定不符');
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    try { previousSpecs = await readJson(join(output, 'specs.json')); } catch { /* Missing old specs cannot authorize reuse. */ }
+    for (const chart of fullSpecs.charts.filter((chart) => !specs.charts.includes(chart))) {
+      const old = previous?.charts.find((entry) => entry.id === chart.id);
+      if (old && chart.status === 'ready' && previousSpecs?.version === fullSpecs.version && previousSpecs?.label === fullSpecs.label && previousSpecs?.release_id === fullSpecs.release_id
+        && previousSpecs.windows && Array.isArray(previousSpecs.charts) && digest(previousSpecs.windows) === digest(fullSpecs.windows)
+        && digest(previousSpecs.charts.find((entry) => entry.id === chart.id) ?? null) === digest(chart)) retained.set(chart.id, old);
+    }
     await mkdir(output, { recursive: true });
-    // Single-chart rework invalidates only the selected images. All remaining
-    // images, rejected previews and index entries retain their exact contents.
-    for (const chart of specs.charts) {
+    // Reuse only a still-ready chart whose complete drawing inputs match.
+    for (const chart of fullSpecs.charts.filter((chart) => !retained.has(chart.id))) {
       await rm(join(output, chart.file), { force: true });
       await rm(join(output, 'rejected', chart.file), { force: true });
     }
@@ -330,10 +340,11 @@ export async function charts({ runDir, envDir, python, only } = {}) {
   await atomicJson(join(output, 'specs.json'), fullSpecs);
   const renderSpecs = only === undefined ? join(output, 'specs.json') : join(output, `.selected-specs-${process.pid}.json`);
   if (only !== undefined) await atomicJson(renderSpecs, specs);
-  const environment = await prepareChartEnvironment({ runDir, envDir, python });
+  const environment = await prepareChartEnvironment({ runDir, envDir, python, deadlineMs: remaining() });
   let renderResults = [], renderReason = null;
-  if (environment.ok && specs.charts.some((chart) => chart.status === 'ready')) {
-    const result = await runChartProcess(environment.python, ['-B', join(chartDir, 'render.py'), '--specs', renderSpecs, '--out-dir', output], { cwd: runDir, env: { ...process.env, MPLCONFIGDIR: environment.mplconfig }, timeout: 540000, stderr: true });
+  if (environment.ok && remaining() <= 0) renderReason = '图表总时间预算已耗尽';
+  if (environment.ok && !renderReason && specs.charts.some((chart) => chart.status === 'ready')) {
+    const result = await runChartProcess(environment.python, ['-B', join(chartDir, 'render.py'), '--specs', renderSpecs, '--out-dir', output], { cwd: runDir, env: { ...process.env, MPLCONFIGDIR: environment.mplconfig }, timeout: remaining(), stderr: true });
     if (result.code === 0) {
       try { const audit = await readJson(join(output, 'audit.json')); if (audit.version !== 1 || !Array.isArray(audit.charts)) throw new Error('audit.json 格式不符'); renderResults = audit.charts; }
       catch (error) { renderReason = `绘图器未返回有效结果：${error.message}`; }
@@ -342,10 +353,11 @@ export async function charts({ runDir, envDir, python, only } = {}) {
   }
   if (only !== undefined) await rm(renderSpecs, { force: true });
   const index = { version: 1, label: specs.label, release_id: specs.release_id, charts: [] };
-  for (const chart of specs.charts) {
+  for (const chart of fullSpecs.charts) {
+    if (retained.has(chart.id)) { index.charts.push(retained.get(chart.id)); continue; }
     const base = { id: chart.id, kind: chart.kind, title: chart.title, caption: chart.caption, before_table: chart.before_table, evidence: chart.evidence, file: chart.file };
     const rendered = renderResults.find((item) => item.id === chart.id);
-    if (chart.status === 'skipped' || !environment.ok || renderReason) index.charts.push({ ...base, status: chart.status === 'skipped' || !environment.ok || environment.fontMissing ? 'skipped' : 'failed', reason: chart.reason ?? environment.reason ?? renderReason, audit: { issues: [], layout: 'none', attempts: 0 } });
+    if (!specs.charts.includes(chart) || chart.status === 'skipped' || !environment.ok || renderReason) index.charts.push({ ...base, status: !specs.charts.includes(chart) || chart.status === 'skipped' || !environment.ok || environment.fontMissing ? 'skipped' : 'failed', reason: chart.reason ?? (!specs.charts.includes(chart) ? '来源规格变化或缺失，请重绘该图' : environment.reason ?? renderReason), audit: { issues: [], layout: 'none', attempts: 0 } });
     else if (!rendered || !['ok', 'rejected', 'skipped', 'failed'].includes(rendered.status) || !rendered.audit) index.charts.push({ ...base, status: 'failed', reason: '绘图器缺少该图的有效审计结果', audit: { issues: [], layout: 'none', attempts: 0 } });
     else {
       let exists = true;
@@ -353,13 +365,12 @@ export async function charts({ runDir, envDir, python, only } = {}) {
       index.charts.push({ ...base, status: exists ? rendered.status : 'failed', ...(exists && rendered.reason ? { reason: rendered.reason } : !exists ? { reason: '绘图器声明成功但图片文件缺失' } : {}), audit: rendered.audit });
     }
   }
-  const replacements = new Map(index.charts.map((chart) => [chart.id, chart]));
-  const merged = previous ? { ...index, charts: [...previous.charts.map((chart) => replacements.get(chart.id) ?? chart), ...index.charts.filter((chart) => !previous.charts.some((old) => old.id === chart.id))] } : index;
   // audit.json and index.json describe the same retained set, even when the
   // renderer/environment cannot run on this invocation.
-  await atomicJson(join(output, 'audit.json'), { version: 1, charts: merged.charts.map(({ id, kind, file, status, reason, audit }) => ({ id, kind, file, status, ...(reason ? { reason } : {}), audit })) });
-  await atomicJson(join(output, 'index.json'), merged);
-  const count = (status) => index.charts.filter((chart) => chart.status === status).length;
-  const reason = environment.reason ?? renderReason ?? (index.charts.every((chart) => chart.status === 'skipped') ? unique(index.charts.map((chart) => chart.reason)).join('；') : null);
-  return redact({ ok: true, total: index.charts.length, passed: count('ok'), rejected: count('rejected'), skipped: count('skipped'), failed: count('failed'), env: { source: environment.source, python: environment.python, matplotlib: environment.matplotlib }, ...(reason ? { reason } : {}) });
+  await atomicJson(join(output, 'audit.json'), { version: 1, charts: index.charts.map(({ id, kind, file, status, reason, audit }) => ({ id, kind, file, status, ...(reason ? { reason } : {}), audit })) });
+  await atomicJson(join(output, 'index.json'), index);
+  const selected = index.charts.filter((chart) => specs.charts.some((spec) => spec.id === chart.id));
+  const count = (status) => selected.filter((chart) => chart.status === status).length;
+  const reason = environment.reason ?? renderReason ?? (selected.every((chart) => chart.status === 'skipped') ? unique(selected.map((chart) => chart.reason)).join('；') : null);
+  return redact({ ok: true, total: selected.length, passed: count('ok'), rejected: count('rejected'), skipped: count('skipped'), failed: count('failed'), env: { source: environment.source, python: environment.python, matplotlib: environment.matplotlib }, ...(reason ? { reason } : {}) });
 }

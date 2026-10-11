@@ -114,19 +114,21 @@ codex mcp get strategic --json
 ## 报告输出
 
 季报默认保存到 `~/Documents/战略季报`，包含 Markdown、实际引用的图表、索引和历史版本。
-可直接要求工作台修改报告目录；Codex 也可使用 `$strategic-analytics:strategic-setup`。
+Codex 和无会话钩子的 MCP + Skill 接入可要求工作台修改本地偏好；Codex 也可使用 `$strategic-analytics:strategic-setup`。
+Claude Code 及使用插件钩子的 WorkBuddy 接入通过客户端插件设置修改目录和同步开关；会话钩子导入的原生设置优先，不使用 helper 保存另一份相反偏好。
 
 飞书同步默认关闭。开启步骤：
 
 1. 安装 lark-cli，并以本人用户身份完成飞书登录。
 2. 确认具备文档创建、文档编辑、素材上传及电子表格创建/写入权限。
-3. 要求工作台「打开季报的飞书同步，同时保留本地 Markdown」，或在客户端插件设置中开启同步。
+3. Codex 或无钩子的接入可要求工作台「打开季报的飞书同步，同时保留本地 Markdown」；使用插件钩子的接入在客户端插件设置中开启同步。
 
 报告校验通过后同步为个人空间中的云文档和附表。正文包含分析、图表及市场/品牌表，商品明细和证据账本放入附表。
 同步不会自动共享资源；分享前请人工审阅。同步失败仍保留本地报告和已有云端链接。
 
 输出偏好在每次生成时固定，修改开关影响后续报告。已有季报需要补同步时，请明确指定那份报告，不要修改其原生成记录。
 发布中断可按脚本提示续跑；如果提示某一步结果不确定，先核对已有云端资源，再由人工决定如何继续。
+同一运行由一个控制者管理，发布及续跑串行完成；不要同时启动两次发布续跑。
 
 ## 更新与卸载
 
@@ -174,7 +176,7 @@ codex plugin marketplace remove strategic
 
 旧插件名为 `flywheel-analytics@flywheel`。先卸载旧插件与旧市场，再按本指南安装 `strategic-analytics@strategic` 并重新配置认证。
 Codex 的令牌变量使用 `STRATEGIC_MCP_TOKEN`；旧变量不能认证新的原生插件连接。
-具体版本差异见 [Release](https://github.com/ccchenhuohuo/strategic-plugin/releases/tag/v0.3.2)。
+具体版本差异见 [Release](https://github.com/ccchenhuohuo/strategic-plugin/releases/tag/v0.3.3)。
 
 ## 常见问题
 
@@ -187,4 +189,4 @@ Codex 的令牌变量使用 `STRATEGIC_MCP_TOKEN`；旧变量不能认证新的�
 | 飞书没有同步 | 检查同步开关、lark-cli 登录身份与权限；查看报告索引及运行记录中的已有链接和错误 |
 | 数据尚未更新 | 核对数据状态中的月份与上游时效，联系战略组处理数据更新 |
 
-更完整的客户端验证事实见[验收范围](ACCEPTANCE-0.3.2.md)，组件分工见[插件架构](ARCHITECTURE.md)。
+更完整的客户端验证事实见[验收范围](ACCEPTANCE-0.3.3.md)，组件分工见[插件架构](ARCHITECTURE.md)。

@@ -27,6 +27,7 @@ FONT_CANDIDATES = (
 
 
 def setup_font():
+    plt.rcParams["text.parse_math"] = False
     for candidate in FONT_CANDIDATES:
         if Path(candidate).is_file():
             font_manager.fontManager.addfont(candidate)

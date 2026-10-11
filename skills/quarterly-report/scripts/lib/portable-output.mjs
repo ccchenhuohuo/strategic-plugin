@@ -8,7 +8,7 @@ export async function captureHookOutput(path, token) {
   let entries, original;
   const take = async () => {
     const actual = await realpath(path), snapshot = await inputSnapshot(actual);
-    if (osAliasPath(path) !== actual || !snapshot || (snapshot.stat.mode & 0o777n) !== 0o600n
+    if ((resolve(path) !== actual && osAliasPath(path) !== actual) || !snapshot || (snapshot.stat.mode & 0o777n) !== 0o600n
       || (process.getuid && snapshot.stat.uid !== BigInt(process.getuid()))) throw new Error('unsafe');
     return snapshot;
   };

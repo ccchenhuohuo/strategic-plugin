@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { json, readJson, redact, safeName, unique } from './common.mjs';
 import { boundOutput } from './portable-binding.mjs';
 import { checkBinding, reportSnapshot } from './check-binding.mjs';
-import { captureInputs, inputSnapshot, validInputBinding } from './input-view.mjs';
+import { captureInputs, chartReferences, inputSnapshot, validInputBinding } from './input-view.mjs';
 
 const optionalJson = async (path) => {
   await plainFile(path);
@@ -110,12 +110,6 @@ function reportFilename(manifest) {
   if (!manifest.report_name || !manifest.label) throw new Error('manifest 缺少 report_name / label');
   return `${name(manifest.report_name)} - ${name(manifest.label)}.md`;
 }
-function chartReferences(markdown) {
-  // assemble emits only inline images with a charts/<file> destination.
-  const paths = [...markdown.matchAll(/!\[[^\]\n]*\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+"[^"\n]*")?\s*\)/gu)].map((match) => match[1] ?? match[2]);
-  return unique(paths.filter((path) => path.startsWith('charts/')).map(ownedPath));
-}
-
 const JOURNAL = '.collect-journal.json';
 const PHASES = ['prepared', 'archiving', 'relocating_index', 'relocating_markdown', 'replacing', 'indexing', 'rendering', 'committed'];
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -135,7 +129,7 @@ async function directoryChain(path, create = false) {
     current = join(current, part);
     let entry = await exists(current);
     if (entry?.isSymbolicLink()) {
-      const osAlias = { '/tmp': '/private/tmp', '/var': '/private/var' }[current];
+      const osAlias = process.platform === 'darwin' && { '/tmp': '/private/tmp', '/var': '/private/var' }[current];
       if (!osAlias || await fs.realpath(current) !== osAlias) throw new Error(`收录目录不得经过符号链接：${current}`);
       current = osAlias;
       entry = await exists(current);
@@ -485,6 +479,15 @@ export async function collect({ runDir, outputEnv }) {
     const oldFiles = previous?.files ?? [];
     const oldInventory = [];
     for (const path of oldFiles) oldInventory.push({ path, sha256: await fileHash(join(target, path)) });
+    if (previous && previous.run_dir !== runDir && (previous.check.ok || previous.feishu.status === '已同步')) {
+      const images = oldInventory.filter((file) => file.path.startsWith('charts/'));
+      const savedCheck = images.length ? await optionalJson(join(previous.run_dir, 'check.json')).catch(() => null) : null;
+      if (!/^[a-f0-9]{64}$/u.test(previous.check.report_sha256 ?? '') ||
+        oldInventory.find((file) => file.path === reportFilename(previous))?.sha256 !== previous.check.report_sha256 ||
+        (images.length && !checkBinding(savedCheck, previous.check.report_sha256, savedCheck?.input_binding).available) ||
+        images.some((file) => file.sha256 === null || savedCheck?.input_binding?.files.find((input) => input.path === file.path)?.sha256 !== file.sha256))
+        throw new Error('拒绝归档：旧库稿缺少校验哈希、正文/登记图片已漂移或旧图片校验不可用；旧校验/同步不能归属于当前内容，请先处理旧稿（文件与元数据保留）');
+    }
     const id = randomUUID();
     staging = join(dir, `.collect-${id}`);
     await fs.mkdir(staging);

@@ -5,7 +5,7 @@ Strategic Analytics 是由战略组开发，面向公司内部有外部市场调
 
 可通过 Codex、Claude Code 和 WorkBuddy 接入，共用同一套分析方法与季报流程。
 
-当前版本：[0.3.2](https://github.com/ccchenhuohuo/strategic-plugin/releases/tag/v0.3.2)。
+当前版本：[0.3.3](https://github.com/ccchenhuohuo/strategic-plugin/releases/tag/v0.3.3)。
 
 ## 可以做什么
 
@@ -111,4 +111,4 @@ SPU／验收问题先说明上述边界。仅当当前环境确有相关项目�
 - [安装、配置、更新与故障处理](docs/INSTALL.md)
 - [版本发布说明](https://github.com/ccchenhuohuo/strategic-plugin/releases) · [更新记录](CHANGELOG.md)
 - [插件架构](docs/ARCHITECTURE.md)
-- [实际验收范围](docs/ACCEPTANCE-0.3.2.md)
+- [实际验收范围](docs/ACCEPTANCE-0.3.3.md)

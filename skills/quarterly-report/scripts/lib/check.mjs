@@ -5,21 +5,22 @@ import { readViewTable, renderReport } from './artifacts.mjs';
 import { reportSnapshot } from './check-binding.mjs';
 import { captureInputs, chartReferences } from './input-view.mjs';
 
-const tokenPattern = /([+\-−]?)(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(亿件|万件|亿|万|件|pp|%)?/gu;
-const normalized = (text) => String(text).replaceAll('−', '-').replaceAll(',', '');
+const tokenPattern = /([+\-−]?)(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:[ \t]*(亿件|万件|亿|万|件|pp|%))?/gu;
+const normalized = (text) => String(text).normalize('NFKC').replaceAll('−', '-').replaceAll(',', '').replace(/[ \t]/gu, '');
 const excerpt = (line) => line.trim().slice(0, 160);
 
-function numberTokens(text, window) {
-  return numberTokensWithLine(text, window).map((item) => item.token);
-}
-function numberTokensWithLine(text, window) {
+function numberTokensWithLine(text, window, labels = []) {
   const found = [];
-  for (const line of String(text).split(/\r?\n/u)) for (const token of lineTokens(line, window)) found.push({ token, line });
+  for (const line of String(text).split(/\r?\n/u)) for (const token of lineTokens(line, window, labels)) found.push({ token, line });
   return found;
 }
-function lineTokens(text, window) {
-  let scrubbed = String(text);
-  if (window?.label) scrubbed = scrubbed.replaceAll(window.label, ' ');
+function lineTokens(text, window, labels) {
+  let scrubbed = String(text).normalize('NFKC');
+  for (const label of labels) {
+    const escaped = label.normalize('NFKC').replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    scrubbed = scrubbed.replace(new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, 'gu'), ' ');
+  }
+  if (window?.label) scrubbed = scrubbed.replaceAll(String(window.label).normalize('NFKC'), ' ');
   // 先剔完整日期与时刻（如上游陈旧警示里的 2026-08-27 10:45:55），否则只剔年月会剩下「-27」
   scrubbed = scrubbed.replace(/\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?\b/gu, ' ');
   scrubbed = scrubbed.replace(/\b\d{4}-\d{2}\b/gu, ' ');
@@ -38,24 +39,22 @@ function lineTokens(text, window) {
   return found;
 }
 
-// 标签里的数字（价格档边界「[200, 500)」、品牌名「INSTA360」、标题里的「66英寸」）不是数据主张：
-// 只对不带单位、不带符号的裸数字放行；带 %/pp/亿/万/件 或正负号的记号仍须逐字匹配展示值。
+// 只豁免完整标签片段，标签里的数字不能挪作该叙述位的其他数据主张。
 const displayCell = /^[+\-−]?\d[\d,]*(?:\.\d+)?(?:亿件|万件|亿|万|件|pp|%)?$/u;
-function labelNumbers(digest) {
-  const numbers = new Set();
+function completeLabels(digest) {
+  const labels = new Set();
   for (const table of asArray(digest.tables)) {
     for (const cell of [table.title, ...asArray(table.rows).flat()]) {
-      const text = String(cell ?? '');
+      const text = String(cell ?? '').normalize('NFKC');
       if (!text || displayCell.test(text.trim())) continue;
-      for (const match of text.matchAll(/\d+(?:\.\d+)?/gu)) numbers.add(match[0]);
+      if (/\d/u.test(text)) labels.add(text.replace(/^★ /u, ''));
     }
   }
-  return numbers;
+  return [...labels].sort((a, b) => b.length - a.length);
 }
-function traceAllowed(token, allowed, labels) {
+function traceAllowed(token, allowed) {
   if (allowed.has(token)) return true;
   if (token.startsWith('+') || token.startsWith('-')) return false;
-  if (/^\d+(?:\.\d+)?$/u.test(token) && labels.has(token)) return true;
   return [...allowed].some((item) => item.replace(/^[+-]/u, '') === token);
 }
 
@@ -100,7 +99,7 @@ export async function check(runDir) {
       }
       catch { blocking.push({ slot: slot.slot, type: 'digest', detail: '摘要缺失或不可读', excerpt: slot.digest }); continue; }
       const allowed = new Set(asArray(digest.allowed_numbers).map(normalized));
-      const labels = labelNumbers(digest);
+      const labels = completeLabels(digest);
       for (const line of draft.split(/\r?\n/u)) {
         const verifyQuestion = line.trimStart().startsWith('待验证：');
         for (const rule of ADVICE) {
@@ -112,9 +111,9 @@ export async function check(runDir) {
           if (matched) blocking.push({ slot: slot.slot, type: 'forbidden', detail: `禁用因果或价格措辞：${matched[0]}`, excerpt: excerpt(line) });
         }
       }
-      for (const { token, line } of numberTokensWithLine(draft, digest.window)) {
+      for (const { token, line } of numberTokensWithLine(draft, digest.window, labels)) {
         numbersChecked++;
-        if (!traceAllowed(token, allowed, labels)) blocking.push({ slot: slot.slot, type: 'number_provenance', detail: `数字无摘要展示值来源：${token}`, excerpt: excerpt(line) });
+        if (!traceAllowed(token, allowed)) blocking.push({ slot: slot.slot, type: 'number_provenance', detail: `数字无摘要展示值来源：${token}`, excerpt: excerpt(line) });
       }
     }
   }

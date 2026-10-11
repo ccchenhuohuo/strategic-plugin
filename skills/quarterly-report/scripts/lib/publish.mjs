@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { addSecret, asArray, json, readJson, redact, unique } from './common.mjs';
-import { readViewTable, renderReport } from './artifacts.mjs';
+import { evidenceReferences, readViewTable, renderReport, reportContext } from './artifacts.mjs';
+import { reportTableNotes, TABLE_READING_NOTES } from './tables.mjs';
 import { mcpTokens, withoutMcpTokens } from './environment.mjs';
 import { boundOutput } from './portable-binding.mjs';
 import { outputBinding } from './output-binding.mjs';
@@ -89,9 +90,8 @@ function tableItems(table) {
     output.push(item(xml, (batch.length + 1) * columns.length * 2 + 1));
   }
   for (const footer of asArray(table.footer)) output.push(item(gray(footer)));
-  for (const note of asArray(table.notes)) output.push(item(gray(`表注：${note}`)));
+  for (const note of reportTableNotes(table)) output.push(item(gray(`表注：${note}`)));
   if (table.reason && table.rows.length && !asArray(table.notes).includes(table.reason)) output.push(item(gray(`表注：${table.reason}`)));
-  output.push(item(gray(`证据：${asArray(table.evidence).join('、') || '缺失'}`)));
   return output;
 }
 
@@ -109,7 +109,7 @@ function sheetName(name, used) {
 function buildPlan(view, unverified, reportSha256) {
   const manifest = view.json('manifest.json');
   if (!manifest.report_name || !manifest.label || !manifest.release_id || !Array.isArray(manifest.chapters)) throw new Error('运行目录 manifest.json 损坏');
-  const ledger = view.text('ledger.jsonl').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
+  const { intro, ledger, caveats } = reportContext(view);
   const allIds = unique(manifest.chapters.flatMap((chapter) => asArray(chapter.tables).map((table) => table.table_id)));
   const tables = new Map(manifest.chapters.flatMap((chapter) => asArray(chapter.tables)).map((metadata) => [metadata.table_id, readViewTable(view, metadata)]));
   let chartIndex;
@@ -155,10 +155,11 @@ function buildPlan(view, unverified, reportSha256) {
       }
     }
   }
-  const workbook = { sheets: [...groups.map((group) => ({ name: group.name, columns: PRODUCT_COLUMNS, data: group.data, dtypes: Object.fromEntries(PRODUCT_COLUMNS.map((column) => [column, 'object'])) })), { name: '证据账本', columns: ['证据', '工具', 'query_id', 'release_id', '状态'], data: ledger.map((record) => [record.id, record.tool, record.query_id ?? '—', record.release_id ?? '—', record.ok ? 'ok' : record.error?.message ?? 'failed'].map(String)), dtypes: { 证据: 'object', 工具: 'object', query_id: 'object', release_id: 'object', 状态: 'object' } }] };
+  const references = evidenceReferences(manifest, passed), ledgerColumns = ['证据', '对应图表', '工具', 'query_id', 'release_id', '状态'];
+  const workbook = { sheets: [...groups.map((group) => ({ name: group.name, columns: PRODUCT_COLUMNS, data: group.data, dtypes: Object.fromEntries(PRODUCT_COLUMNS.map((column) => [column, 'object'])) })), { name: '证据账本', columns: ledgerColumns, data: ledger.map((record) => [record.id, (references.get(record.id) ?? []).join('；') || '—', record.tool, record.query_id ?? '—', record.release_id ?? '—', record.ok ? 'ok' : record.error?.message ?? 'failed'].map(String)), dtypes: Object.fromEntries(ledgerColumns.map((column) => [column, 'object'])) }] };
   const links = { ledger: '证据账本', ...Object.fromEntries(groups.map((group) => [group.key, group.name])) };
   const link = (key, text) => `<a href="__FW_WORKBOOK_${key}__">${esc(text)}</a>`;
-  const content = [...markdownXml(view.text(manifest.data_note))];
+  const content = [...markdownXml(intro)];
   for (const chapter of manifest.chapters) {
     content.push(item(`<h1>${esc(chapter.title)}</h1>`));
     for (const block of asArray(chapter.blocks)) {
@@ -182,15 +183,13 @@ function buildPlan(view, unverified, reportSha256) {
       } else throw new Error(`未知 manifest 块类型：${block.type}`);
     }
   }
-  content.push(item('<h1>附录：证据账本与口径警示</h1>'), item(`<p>${link('ledger', '证据账本')}</p>`));
-  const caveats = [];
-  for (const record of ledger.filter((entry) => entry.ok)) {
-    const evidence = view.json(relative(`evidence/${record.id}.json`));
-    caveats.push(...asArray(evidence.envelope?.caveats), ...asArray(evidence.envelope?.coverage_notes));
-  }
-  for (const warning of unique(caveats)) content.push(item(`<p>${inline(warning)}</p>`));
+  const note = view.text(manifest.data_note);
+  content.push(item('<h1>附录：数据说明与溯源</h1>'), ...markdownXml(note.replace(/^## /u, '### ')),
+    ...TABLE_READING_NOTES.map((text) => item(gray(text))), item(`<p>${link('ledger', '证据账本（含对应图表）')}</p>`));
+  for (const warning of caveats.filter((text) => !note.includes(text))) content.push(item(`<p>${inline(warning)}</p>`));
   const title = `${manifest.report_name} - ${manifest.label}`;
-  const complete = `生成状态：已完成｜release ${manifest.release_id}｜机械校验通过｜图表 ${passed.length}/${charts.length}${unverified.length ? `｜未经语义核查：${unverified.join('、')}` : ''}`;
+  content.push(item(gray(`生成记录：release ${manifest.release_id}｜机械校验通过｜图表 ${passed.length}/${charts.length}${unverified.length ? `｜未经语义核查：${unverified.join('、')}` : ''}`)));
+  const complete = `生成状态：已完成（草稿，待人工审阅）${unverified.length ? '｜部分内容未经语义核查，详见附录' : ''}`;
   const files = {}, steps = [];
   const add = (step) => { steps.push({ number: steps.length + 1, ...step }); };
   add({ kind: 'workbook', write: true, argv: ['sheets', '+workbook-create', '--as', 'user', '--title', `${title} · 附表`, '--sheets', '@publish/workbook.json', '--format', 'json'], estimated_blocks: 0 });
@@ -208,7 +207,6 @@ function buildPlan(view, unverified, reportSha256) {
     if (entry.chart) {
       flush(); const chart = entry.chart;
       add({ kind: 'image', write: true, chart_id: chart.id, argv: ['docs', '+media-insert', '--as', 'user', '--doc', '__DOCUMENT_ID__', '--file', relative(`charts/${chart.file}`), '--caption', String(chart.caption), '--align', 'center', '--width', '800', '--format', 'json'], estimated_blocks: 1 });
-      buffer.push(gray(`证据：${asArray(chart.evidence).join('、') || '缺失'}`)); blocks = 1; chars = buffer[0].length;
     } else {
       if (entry.blocks > MAX_BLOCKS || entry.xml.length > MAX_CHARS) throw new Error('单个顶层正文块超过发布切块上限');
       if (blocks + entry.blocks > MAX_BLOCKS || chars + entry.xml.length + 1 > MAX_CHARS) flush();
@@ -239,6 +237,7 @@ async function call(lark, argv, runDir, env) {
     const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); killTimer = setTimeout(() => child.kill('SIGKILL'), 1000); }, 180000);
     let killTimer;
     const finish = (result) => { if (settled) return; settled = true; clearTimeout(timer); clearTimeout(killTimer); done(result); };
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => { stdout = (stdout + chunk).slice(-2000000); });
     child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-2000000); });
     child.on('error', (error) => finish({ code: null, error: error.message, stdout: '', json: null }));
@@ -456,24 +455,26 @@ async function publishImpl(input) {
       const result = await call(lark, argv, options.runDir, env);
       if (step.write) {
         lastWrite = Date.now(); journal.last_write_at = lastWrite;
-        await atomicJson(journalPath, journal);
       }
       // Preserve returned resource identity even on partial failures; do not
       // persist stdout, auth state or credentials in the journal.
-      if (step.kind === 'workbook' || step.kind === 'create') {
-        let identityError;
-        try { absorb(journal, result, step); } catch (error) { identityError = error; }
+      let identityError;
+      try { absorb(journal, result, step); } catch (error) { identityError = error; }
+      if (!success(result, step) || identityError) {
         await atomicJson(journalPath, journal);
-        if (identityError && success(result, step)) throw identityError;
+        throw success(result, step) ? identityError : new Error(callError(result));
       }
-      if (!success(result, step)) throw new Error(callError(result));
-      absorb(journal, result, step);
       if (step.kind === 'workbook_info' && !Object.values(plan.links).every((name) => journal.sheet_ids[name])) throw new Error('附表子表 id 查询不完整，请核对附表');
-      journal.completed.push(step.number);
-      if (step.write) delete journal.pending;
+      const completed = { ...journal, completed: [...journal.completed, step.number] };
+      if (step.write) delete completed.pending;
+      await atomicJson(journalPath, completed);
+      savedJournal = journal = completed;
       executed++;
-      await atomicJson(journalPath, journal);
-    } catch (error) { return fail(error.message, { doc_url: journal.doc_url ?? undefined, workbook_url: journal.workbook_url ?? undefined, failed_step: String(step.number), resume: command(options, true) }); }
+    } catch (error) {
+      // Keep pending and known identities if committing the completed step failed.
+      await atomicJson(journalPath, journal).catch(() => {});
+      return fail(error.message, { doc_url: journal.doc_url ?? undefined, workbook_url: journal.workbook_url ?? undefined, failed_step: String(step.number), resume: command(options, true) });
+    }
   }
   const result = { ok: true, target: 'feishu', report_sha256: plan.report_sha256, input_binding: plan.input_binding, plan_digest: plan.digest,
     doc_url: journal.doc_url, workbook_url: journal.workbook_url, charts_inserted: plan.stats.charts_inserted, tables_inline: plan.stats.tables_inline, tables_in_workbook: plan.stats.tables_in_workbook };
