@@ -13,6 +13,7 @@ import { verifyNativeBinding } from './lib/codex-binding.mjs';
 import { boundOutput, verifyPortableBinding } from './lib/portable-binding.mjs';
 import { assertResumeBinding, finishRunArgs, readRunBinding, startRunArgs } from './lib/run-binding.mjs';
 import { mcpTokens } from './lib/environment.mjs';
+import { sourceContract } from './lib/source-contract.mjs';
 
 for (const token of mcpTokens(process.env)) addSecret(token);
 
@@ -69,8 +70,7 @@ async function prepare(args) {
   validateWindow(start, end);
   const count = args.concurrency === undefined ? 2 : Number(args.concurrency);
   if (!Number.isInteger(count) || count < 1 || count > 4) throw new Error('--concurrency 须为 1..4');
-  const sections = args.sections ? args.sections.split(',').map(Number) : null;
-  if (sections && (!sections.length || sections.some((item) => !Number.isInteger(item) || item < 2 || item > 6) || new Set(sections).size !== sections.length)) throw new Error('--sections 仅接受 2..6 的不重复逗号列表');
+  const sections = args.sections === undefined ? null : args.sections.split(',').map(Number);
   const config = await readJson(resolve(args.config ?? defaultConfig));
   if (!Array.isArray(config.sites) || !Array.isArray(config.focus) || !Array.isArray(config.company_brands)) throw new Error('配置缺少 sites/focus/company_brands');
   const focuses = selectedFocus(config, sections);
@@ -142,7 +142,9 @@ async function prepare(args) {
   if (args.resume) await writeFile(join(runDir, 'ledger.jsonl'), '');
   await persistStage(statusCalls, results, runDir, token);
   const window = { current_start: start, current_end: end };
-  await executeStage(client, probes(config, window), context);
+  // New scope excludes unclassified category rows. It cannot justify widening
+  // an unobserved L3 slice to its parent; only the historical contract can.
+  if (sourceContract(status.envelope.stamp) === 'legacy_derived') await executeStage(client, probes(config, window), context);
   const unlabelled = new Set([...results].filter(([key, record]) => key.startsWith('P:') && record.ok && isL3Unlabelled(record.envelope)).map(([key]) => key));
   const main = mainCalls(config, focuses, sections, window, unlabelled);
   await executeStage(client, main.slice(0, 1), context);

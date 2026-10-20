@@ -33,7 +33,7 @@ function historicalRecord(record) {
   return ['current_start', 'current_end'].every((key) => typeof record[key] === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/u.test(record[key]))
     && typeof record.label === 'string' && record.label.length > 0 && typeof record.release_id === 'string' && record.release_id.length > 0
     && typeof record.config === 'string' && isAbsolute(record.config) && typeof record.config_digest === 'string' && /^[a-f0-9]{16}$/u.test(record.config_digest)
-    && (record.sections === 'all' || (Array.isArray(record.sections) && record.sections.length > 0 && record.sections.every((x) => Number.isInteger(x) && x >= 2 && x <= 6)));
+    && (record.sections === 'all' || (Array.isArray(record.sections) && record.sections.length > 0 && new Set(record.sections).size === record.sections.length && record.sections.every((x) => Number.isSafeInteger(x) && x >= 2)));
 }
 
 function validUpgrade(record) {

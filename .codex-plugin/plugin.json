@@ -1,6 +1,6 @@
 {
   "name": "strategic-analytics",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "战略大盘分析：14 个受治理只读 MCP 工具；共用分析与季报 Skill、配对连接和确定性脚本，数字附复现戳与口径警示。",
   "author": {
     "name": "chenyu"

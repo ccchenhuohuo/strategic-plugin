@@ -131,6 +131,7 @@ function writePrompt(runDir, slots, issues) {
     `报告运行目录：${runDir}`,
     '为下列叙述位写作（按你的工作方法：先读摘要，再写叙述；只写叙述，不写表格和标题）：',
     paths(runDir, slots),
+    '新摘要按 columns_ref/column_sets 解析；需要未投影明细时只读摘要指向的 canonical 表，结论只限已读证据。',
     ...(issues && issues.length ? ['', '这是修订：上一版有以下问题，逐条修正；没有问题的句子保持不动，不要新增摘要里没有的数字。', issueText(issues)] : []),
     '',
     '完成后返回你写入的叙述位编号。',
@@ -141,6 +142,7 @@ function verifyPrompt(runDir, slots) {
     `报告运行目录：${runDir}`,
     '核查下列叙述位（草稿与其摘要）：',
     paths(runDir, slots),
+    '新摘要的省略行与标题预览不能支撑未读明细的主张；必要时读取对应 canonical 表核对，缺证据如实报告。',
     '',
     '只报告确有其事的问题；没有问题返回空列表。',
   ].join('\n')

@@ -1,6 +1,10 @@
 # Strategic Analytics 的共同核心
 
-本文描述 0.3.3 的实际架构。共同核心沿用 0.3.2，最新验收事实和客户端边界见 [0.3.3 验收范围](ACCEPTANCE-0.3.3.md)，此前安装与执行记录见 [0.3.2 验收范围](ACCEPTANCE-0.3.2.md)。
+本文描述 0.3.4 的组件与契约；部署代码、绑定数据和客户端发行是三个独立状态。具体实测与未覆盖项见 [0.3.4 验收范围](ACCEPTANCE-0.3.4.md)；[0.3.3](ACCEPTANCE-0.3.3.md) 与 [0.3.2](ACCEPTANCE-0.3.2.md) 记录各自当时的事实，不自动继承为本版结果。
+
+**发布状态：0.3.4 已正式发布。**
+
+生产已完成 pipeline **0.16.1** / table_spec **1.6.0** 与 MCP **0.3.4** 的部署及新数据验收。2026-10-20 的生产构建发布后，经只读独立验收、库外金额复算和实际 MCP 账号测试，解除维护绑定；公网 54 项检查全部通过。当前响应采用 `direct_wide`，完整数据范围为 **2024-01～2026-09**，上游状态为 `current`，维护绑定已解除，临时生产构建开关已撤。Bearer 原地址与独立行业链保持，九个 OAuth 停用入口均返回 HTTP 410。
 
 ## 一份 package 的实际关系
 
@@ -12,7 +16,7 @@ flowchart TD
   Analysis --> MCP[受治理 HTTP MCP\n计算数字并返回复现戳]
   Report --> Engine[同一 report.mjs 引擎\n取数、证据、表格、门禁与恢复]
   Engine --> MCP
-  Engine --> Digests[服务端展示值生成的章节摘要]
+  Engine --> Digests[服务端展示值与观察事实生成的写作摘要]
   Digests --> Roles[写手、核查员、摘要角色\n由工作台模型执行]
   Roles --> Draft[洞察草稿]
   Draft --> Engine
@@ -31,8 +35,8 @@ flowchart TD
 | --- | --- | --- |
 | 开发仓库 | methodology/、tests/、docs/，根 CLAUDE.md/AGENTS.md | 维护正本、生成投影、开发和验收；根指引不是分析工作区运行指南 |
 | 安装包 | .claude-plugin/、.codex-plugin/、.mcp.json、skills/、codex/、agents/、workflows/、hooks/ | 分发共同 Skill、角色参考、可执行引擎与薄客户端接入 |
-| 远程工具服务 | server/ | 标准只读 HTTP MCP，14 个工具；业务计算、复现戳、代次绑定与响应级警示由服务端承担 |
-| 远程数据构建 | pipeline/、dagster/ | 数据层语义、断言与发布；不进入客户端季报引擎，不由本轮修改或部署 |
+| 远程工具服务 | server/ | 标准只读 HTTP MCP，14 个工具；业务计算、复现戳、代次绑定与响应级警示由服务端承担。0.3.4 仅保留 Bearer 接入（MCP OAuth 开发已停止）；响应预算为 compact catalog 16 KiB、其余工具 64 KiB，超限返回小型明确错误；品牌窗口分页每页 512 行、最多 128 页、120 秒预算 |
+| 远程数据构建 | pipeline/、dagster/ | 数据层语义、断言与发布；不进入客户端季报引擎。v1.6 实现采用权威直供宽表与新版三级类目（97 条路径、7 个一级类目），来源合同按绑定代次解释、构建按显式截止月冻结；具体生效数据与生产验证见本版验收记录 |
 
 安装插件不会把远程服务部署到用户机器，也不授予直接访问 Doris 的能力。客户端脚本只调用受治理 MCP，不重算业务数字。
 
@@ -40,7 +44,7 @@ flowchart TD
 
 宿主主 Agent 读取 `skills/strategic-analytics/SKILL.md`，按用户问题选择标准 MCP 工具，解释响应的展示值、状态与口径。
 通用分析 Skill 是自由问答指导，不是另一个常驻 Agent，也不把所有问答塞进季报骨架。
-分析文本由 `methodology/CORE.md` 生成；本轮 CORE 口径与 `server/src/instructions.generated.ts` 内容不变。
+分析文本以 `methodology/CORE.md` 为正本，季报规则以 `methodology/REPORT.md` 为正本。本版两份正本及其 Skill、角色、工作区指引和 `server/src/instructions.generated.ts` 均有更新，覆盖新来源合同、参数边界、响应预算和写作纪律；投影由同一构建生成，不另维护一份手写规则。
 
 ## 季报控制与写作
 
@@ -51,7 +55,7 @@ flowchart TD
 | --- | --- | --- |
 | 控制契约 | quarterly-report/SKILL.md | 固定阶段、输入/输出路径、有限修订与续跑、异常收尾；宿主按能力调度 |
 | 非确定性角色 | references/writer.md、summary.md、verifier.md | 写章节、后写摘要、对照摘要核查；数字原样引用服务端 *_display，不计算、不生成表格 |
-| 确定性引擎 | scripts/report.mjs、lib/plan.mjs、tables.mjs、artifacts.mjs、check.mjs | 固定查询计划、证据账本、骨架、摘要、表格、组装、机械门禁 |
+| 确定性引擎 | scripts/report.mjs、lib/plan.mjs、tables.mjs、artifacts.mjs、check.mjs、source-contract.mjs、writing-observations.mjs | 固定查询计划、证据账本、骨架、摘要、表格、组装、机械门禁；source-contract 按绑定代次判定来源合同，writing-observations 生成写作摘要的 observations 投影与摘要数字白名单。0.3.4 默认重点章为支撑类、灯光类、音视频类三章，全球市场分母仍覆盖全部受治理范围；每份写作摘要预算 32 KiB，超限失败关闭 |
 | 身份、输入与发布绑定 | lib/run-binding.mjs、output-binding.mjs、input-view.mjs、check-binding.mjs、publish.mjs | 原运行身份、冻结输出、一次材料视图、正文/输入版本、发布计划与副本；变更后旧通过及旧链接不能归给新稿 |
 | 收录与恢复 | lib/collect.mjs | 报告/图表、索引、历史、journal 与 EIO 恢复；保留原运行与用户文件 |
 | 可选输出 | lib/charts.mjs、scripts/charts/、lib/publish.mjs | 锁定 Python 绘图与版面门禁；已登录 lark-cli 的个人空间同步 |
@@ -70,7 +74,7 @@ flowchart TD
 | report-runner 兼容 Agent | Claude 可选 Workflow 中的脚本阶段 | 执行同一引擎，保存证据；通用路径由主 Agent 直接做这项工作 |
 | 章节写手 | 引擎产出的分章摘要、角色参考 | 写洞察文本，不调业务工具、不生成表格、不计算数字 |
 | 语义核查员 | 相同摘要 + 写手草稿 | 审口径、来源和推断，返回问题；独立执行能力由宿主提供 |
-| 摘要写手 | 已完成并核查的章节 | 最后写执行摘要，复用已核实叙述和展示值 |
+| 摘要写手 | 先读对应 exec digest，再读已核查的章节成稿以把握重点 | 最后写执行摘要；数字只取对应 exec digest 的服务端展示值，不从正文抄取或重算 |
 
 `agents/report-*.md` 是这些角色在 Claude 插件中的同源表示，不是四套业务引擎。其他宿主使用 references 的相同约束，不需要识别 Claude 的 Agent frontmatter 或模型别名。
 
@@ -117,6 +121,8 @@ CodeBuddy 是 setup 的小型接入别名，CLI 结果不能冒充 WorkBuddy GUI
 
 ## 验收界限
 
-Codex 实际安装和模型执行、合成 HTTP MCP 认证与完整引擎回放、文件系统故障注入分别记录，不把单元测试当成这些行为的替代证明。
-合成验收不验证真实生产业务数字；本机未配置真实服务令牌，本轮不连接生产。飞书只验证假 CLI 门禁与恢复，不声称真实写入成功。
-图表未生成、同会话自查、同步未开启/失败分别披露。桌面 UI 未验收；WorkBuddy 只有官方规范依据，不能标为实机通过。
+本轮已完成真实开发库构建、独立验收、确认丢失恢复演练、金额库外复算及完整季报；生产首轮接线验证与新数据生产验收分开记录，具体结果见[本版验收范围](ACCEPTANCE-0.3.4.md)。开发环境成功不证明生产数据已放行，代码版本也不能代替数据绑定状态。
+
+Codex 实际安装、真人模型会话、原生宿主绑定、合成 HTTP 认证、真实服务查询、图表、故障注入和本地收录分别记录。本轮真实季报通过 unbound 兼容入口验证引擎与角色，不冒称新入口的原生宿主或 Workflow 实机验收；三项真实 Codex CLI 用例按名称排除，WorkBuddy 桌面实机及真实钥匙串不在本轮通过范围。
+
+图表未生成、同会话自查、未核查组、同步关闭或失败均需披露；本轮报告只临时本地收录，未新建或共享真实飞书业务文档。

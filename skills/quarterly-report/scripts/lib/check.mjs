@@ -1,7 +1,9 @@
 import { join } from 'node:path';
-import { asArray, redact, writeJson } from './common.mjs';
+import { isDeepStrictEqual } from 'node:util';
+import { digestVisibleNumbers, evidenceCaveats, OBSERVATION_RULE, projectObservations } from './writing-observations.mjs';
+import { asArray, redact, safeName, writeJson } from './common.mjs';
 import { ADVICE, CAUSAL, PRICE_CLAIMS } from './lexicon.mjs';
-import { readViewTable, renderReport } from './artifacts.mjs';
+import { readViewTable, renderReport, WRITING_TITLE_LENGTH } from './artifacts.mjs';
 import { reportSnapshot } from './check-binding.mjs';
 import { captureInputs, chartReferences } from './input-view.mjs';
 
@@ -41,10 +43,11 @@ function lineTokens(text, window, labels) {
 
 // 只豁免完整标签片段，标签里的数字不能挪作该叙述位的其他数据主张。
 const displayCell = /^[+\-−]?\d[\d,]*(?:\.\d+)?(?:亿件|万件|亿|万|件|pp|%)?$/u;
-function completeLabels(digest) {
+function completeLabels(digest, view) {
   const labels = new Set();
   for (const table of asArray(digest.tables)) {
-    for (const cell of [table.title, ...asArray(table.rows).flat()]) {
+    const full = digest.format === 'writing.v2' ? view.json(table.canonical.json) : null;
+    for (const cell of [table.title, ...asArray(table.rows).flat(), ...asArray(full?.rows).flat()]) {
       const text = String(cell ?? '').normalize('NFKC');
       if (!text || displayCell.test(text.trim())) continue;
       if (/\d/u.test(text)) labels.add(text.replace(/^★ /u, ''));
@@ -58,6 +61,39 @@ function traceAllowed(token, allowed) {
   return [...allowed].some((item) => item.replace(/^[+-]/u, '') === token);
 }
 
+function checkObservations(view, manifest, chapter, slot, digest, evidence) {
+  const marked = Object.hasOwn(manifest, 'writing_observations') || manifest.chapters.some((item) => item.slots.some((entry) => Object.hasOwn(entry, 'observation_tables') || /^s\d+\.3\.\d+\.[A-Za-z]+$/u.test(entry.slot))) || Object.hasOwn(digest, 'observations') || Object.hasOwn(digest.projection_rules ?? {}, 'observations');
+  if (!marked) return;
+  if (manifest.writing_observations !== true || digest.format !== 'writing.v2' || digest.projection_rules?.observations !== OBSERVATION_RULE || !Array.isArray(digest.observations)) throw new Error('摘要观察投影标记缺失或不一致');
+  const start = chapter.blocks.findIndex((block) => block.type === 'slot' && block.id === slot.slot);
+  if (start < 0) throw new Error('叙述位未登记在正文骨架');
+  const following = [];
+  for (const block of chapter.blocks.slice(start + 1)) {
+    if (block.type !== 'table') break;
+    following.push(block.id);
+  }
+  let listed = following, related = following;
+  if (slot.slot === 'exec.global') listed = related = ['2.1a', '2.1b', '2.2'];
+  else if (slot.slot.startsWith('exec.focus.')) {
+    const match = following.length === 1 && following[0].match(/^summary\.focus\.(\d+)$/u);
+    const focus = match && manifest.chapters.find((item) => item.id === `sec${match[1]}`);
+    if (!focus) throw new Error('执行摘要缺少对应重点章节');
+    listed = [`${match[1]}.1a`, `${match[1]}.1c`, `${match[1]}.2a`];
+    related = focus.tables.map((table) => table.table_id);
+  }
+  if (!related.length || new Set(related).size !== related.length || !isDeepStrictEqual(slot.observation_tables, related) || !isDeepStrictEqual(digest.tables.map((table) => table.id), listed)) throw new Error('摘要观察范围与正文骨架不一致');
+  const registered = [...manifest.chapters.flatMap((item) => item.tables), ...asArray(manifest.writing_tables)];
+  const canonical = related.map((id) => {
+    const metadata = registered.find((table) => table.table_id === id);
+    if (!metadata || !view.snapshot(`tables/${safeName(id)}.json`)) throw new Error(`观察投影缺少完整 JSON 表：${id}`);
+    return readViewTable(view, metadata);
+  });
+  const expected = projectObservations(canonical, listed, evidenceCaveats(canonical, evidence));
+  const statuses = canonical.map((table) => ({ table: table.id, status: table.status, ...(table.reason ? { reason: table.reason } : {}) }));
+  if (!isDeepStrictEqual(digest.observations, expected.observations) || !isDeepStrictEqual(digest.notes, expected.notes) || !isDeepStrictEqual(digest.statuses, statuses)) throw new Error('摘要观察限制、说明或状态与完整来源不一致');
+  if (digest.tables.some((table) => Object.hasOwn(table, 'observation_context'))) throw new Error('摘要观察投影混用旧格式');
+}
+
 export async function check(runDir) {
   const blocking = [], warnings = [];
   const reportPath = join(runDir, 'report.md');
@@ -66,6 +102,22 @@ export async function check(runDir) {
   catch (error) { blocking.push({ type: 'report_unavailable', detail: `正文不存在或不可读：${error.message}`, excerpt: 'report.md' }); }
   const view = await captureInputs(runDir, { reportSnapshot: snapshot ?? null });
   const manifest = view.json('manifest.json');
+  let ledger = [];
+  try { ledger = view.text('ledger.jsonl', true).trim().split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line)); }
+  catch { blocking.push({ type: 'consistency', detail: '证据账本不可读', excerpt: 'ledger.jsonl' }); }
+  if (!ledger.length) blocking.push({ type: 'consistency', detail: '证据账本为空', excerpt: 'ledger.jsonl' });
+  const releases = new Set(), byEvidence = new Map();
+  for (const item of ledger.filter((entry) => entry.ok)) {
+    try {
+      const evidence = view.json(`evidence/${item.id}.json`);
+      byEvidence.set(item.id, evidence);
+      const release = evidence.envelope?.stamp?.release_id;
+      if (!release || release !== item.release_id) blocking.push({ type: 'consistency', detail: `证据 ${item.id} 的 release_id 缺失或与账本不一致`, excerpt: item.id });
+      else releases.add(release);
+    } catch { blocking.push({ type: 'consistency', detail: `证据 ${item.id} 缺失或不可读`, excerpt: item.id }); }
+  }
+  if (releases.size !== 1 || !releases.has(manifest.release_id)) blocking.push({ type: 'consistency', detail: '成功证据的 release_id 不一致或与 manifest 不符', excerpt: [...releases].join('、') });
+  for (const item of ledger.filter((entry) => !entry.ok)) warnings.push({ evidence: item.id, detail: item.error?.message ?? '取数失败' });
   if (snapshot) {
     try {
       const expected = Buffer.from(redact(renderReport(view)), 'utf8');
@@ -75,6 +127,11 @@ export async function check(runDir) {
     }
   }
   let tables = 0, slots = 0, numbersChecked = 0;
+  for (const table of asArray(manifest.writing_tables)) {
+    tables++;
+    try { readViewTable(view, table); }
+    catch (error) { blocking.push({ table: table.table_id, type: 'table_content', detail: error.message, excerpt: table.path }); }
+  }
   for (const chapter of manifest.chapters) {
     for (const table of chapter.tables) {
       tables++;
@@ -96,10 +153,32 @@ export async function check(runDir) {
       try {
         digest = view.json(slot.digest);
         if (!digest || !Array.isArray(digest.allowed_numbers) || digest.allowed_numbers.some((item) => typeof item !== 'string') || !Array.isArray(digest.tables)) throw new Error('摘要格式损坏');
+        if (digest.format !== undefined && digest.format !== 'writing.v2') throw new Error('未知摘要格式');
+        checkObservations(view, manifest, chapter, slot, digest, byEvidence);
+        if (digest.format === 'writing.v2') for (const projected of digest.tables) {
+          const columns = digest.column_sets?.[projected.columns_ref];
+          if (!Array.isArray(columns) || columns.some((item) => typeof item !== 'string')) throw new Error('摘要共享列引用损坏');
+          const metadata = [...manifest.chapters.flatMap((item) => item.tables), ...asArray(manifest.writing_tables)].find((item) => item.table_id === projected.id);
+          if (!metadata || projected.canonical?.json !== `tables/${safeName(projected.id)}.json`) throw new Error('摘要完整表引用损坏');
+          const canonical = readViewTable(view, metadata), p = projected.projection;
+          if (!p || p.total_rows !== canonical.rows.length || p.omitted_rows !== p.total_rows - projected.rows.length || !Array.isArray(p.row_indexes) || new Set(p.row_indexes).size !== projected.rows.length || p.row_indexes.length !== projected.rows.length || !Array.isArray(p.column_indexes) || p.column_indexes.length !== columns.length) throw new Error('摘要投影范围损坏');
+          if (columns.some((col, index) => col !== canonical.columns[p.column_indexes[index]]) || projected.rows.some((row, index) => row.length !== columns.length || row.some((cell, col) => {
+            const original = canonical.rows[p.row_indexes[index]]?.[p.column_indexes[col]];
+            const abbreviated = columns[col] === '标题' && Array.from(String(original)).length > WRITING_TITLE_LENGTH ? `${Array.from(String(original)).slice(0, WRITING_TITLE_LENGTH).join('')}…〔标题摘要〕` : original;
+            return cell !== abbreviated;
+          }))) throw new Error('摘要数字/标签与完整表不一致');
+          // summaryTables() 仅对重点执行摘要的趋势合计和全球价格带清空页脚；
+          // 不能按裁剪列数或 projection.rule 推断，其他表仍须原样保留 canonical 页脚。
+          const omitFooter = slot.slot.startsWith('exec.focus.') && /^\d+\.(?:1a|2a)$/u.test(projected.id);
+          if (!isDeepStrictEqual(projected.footer, omitFooter ? [] : canonical.footer)) throw new Error('摘要页脚与完整表不一致');
+        }
       }
       catch { blocking.push({ slot: slot.slot, type: 'digest', detail: '摘要缺失或不可读', excerpt: slot.digest }); continue; }
       const allowed = new Set(asArray(digest.allowed_numbers).map(normalized));
-      const labels = completeLabels(digest);
+      // 新摘要把行/页脚已可见的服务端展示数字从白名单字段剔除以避免重复存储；
+      // 仅在全部投影（含页脚）通过 canonical 校验后恢复并集，旧摘要与既有条目不受影响。
+      if (digest.format === 'writing.v2') for (const number of digestVisibleNumbers(digest.tables)) allowed.add(number);
+      const labels = completeLabels(digest, view);
       for (const line of draft.split(/\r?\n/u)) {
         const verifyQuestion = line.trimStart().startsWith('待验证：');
         for (const rule of ADVICE) {
@@ -119,21 +198,6 @@ export async function check(runDir) {
   }
   const note = view.text(manifest.data_note, true);
   for (const word of ['估算', '缺失≠零', '固定汇率', '截断']) if (!note.includes(word)) blocking.push({ type: 'consistency', detail: `数据说明缺少必需警示：${word}`, excerpt: manifest.data_note });
-  let ledger = [];
-  try { ledger = view.text('ledger.jsonl', true).trim().split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line)); }
-  catch { blocking.push({ type: 'consistency', detail: '证据账本不可读', excerpt: 'ledger.jsonl' }); }
-  if (!ledger.length) blocking.push({ type: 'consistency', detail: '证据账本为空', excerpt: 'ledger.jsonl' });
-  const releases = new Set();
-  for (const item of ledger.filter((entry) => entry.ok)) {
-    try {
-      const evidence = view.json(`evidence/${item.id}.json`);
-      const release = evidence.envelope?.stamp?.release_id;
-      if (!release || release !== item.release_id) blocking.push({ type: 'consistency', detail: `证据 ${item.id} 的 release_id 缺失或与账本不一致`, excerpt: item.id });
-      else releases.add(release);
-    } catch { blocking.push({ type: 'consistency', detail: `证据 ${item.id} 缺失或不可读`, excerpt: item.id }); }
-  }
-  if (releases.size !== 1 || !releases.has(manifest.release_id)) blocking.push({ type: 'consistency', detail: '成功证据的 release_id 不一致或与 manifest 不符', excerpt: [...releases].join('、') });
-  for (const item of ledger.filter((entry) => !entry.ok)) warnings.push({ evidence: item.id, detail: item.error?.message ?? '取数失败' });
   let charts = [];
   try { if (view.snapshot('charts/index.json')) charts = asArray(view.json('charts/index.json').charts); }
   catch (error) {

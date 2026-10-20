@@ -9,6 +9,10 @@ const PRODUCT = 'strategic_product_rank';
 const METRICS = ['amt_discount', 'units_est', 'weighted_discount_price'];
 
 export function selectedFocus(config, sections) {
+  // Chapters 1/2 are reserved; focus chapter IDs come only from this config.
+  if (config.focus.some((focus) => !Number.isSafeInteger(focus.section_no) || focus.section_no < 3)) throw new Error('配置 focus.section_no 须为不小于 3 的整数');
+  const available = [2, ...config.focus.map((focus) => focus.section_no)];
+  if (sections !== null && sections !== undefined && (!Array.isArray(sections) || !sections.length || sections.some((section) => !available.includes(section)) || new Set(sections).size !== sections.length)) throw new Error(`--sections 仅接受实际配置章节 ${available.join(',')} 的不重复逗号列表`);
   // 在 prepare 的现有配置入口拒绝不可区分的派生文件名，保留旧命名。
   const uniqueNames = (names, kind) => {
     if (new Set(names.map(safeName)).size !== names.length) throw new Error(`配置${kind}产生相同派生文件路径`);

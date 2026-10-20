@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { asArray, digest, readJson, redact, safeName, unique, writeJson } from './common.mjs';
 import { readTable } from './tables.mjs';
 import { clientEnv, withoutMcpTokens } from './environment.mjs';
+import { sourceContract } from './source-contract.mjs';
 
 const chartDir = fileURLToPath(new URL('../charts/', import.meta.url));
 const GROWTH = 'strategic_market_growth', PRICE = 'strategic_price_band_distribution', BRAND = 'strategic_brand_view';
@@ -119,7 +120,9 @@ export async function buildChartSpecs(runDir) {
           chart.panels.push(panel);
           for (const [index, segment] of focus.trend_segments.entries()) {
             const probes = segment.paths.flatMap((path) => {
-              if (path.std_l3 === undefined) return [];
+              // Direct-wide scope has no unclassified L3 records to fall back
+              // from; its segment evidence is sufficient without legacy probes.
+              if (path.std_l3 === undefined || sourceContract(record.envelope?.stamp) === 'direct_wide') return [];
               const matching = allEvidence.filter((item) => sameGroup(item, ['std_l3']) && windowCall(item) && item.arguments?.filters?.site === site && item.arguments.filters.std_l1 === path.std_l1 && item.arguments.filters.std_l2 === path.std_l2);
               if (matching.length !== 1) throw new Error(`三级标注探针缺失或不唯一：${siteName(site)} ${path.std_l1}/${path.std_l2}`);
               return matching;

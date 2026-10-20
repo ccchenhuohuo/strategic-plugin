@@ -163,11 +163,13 @@ function buildPlan(view, unverified, reportSha256) {
   for (const chapter of manifest.chapters) {
     content.push(item(`<h1>${esc(chapter.title)}</h1>`));
     for (const block of asArray(chapter.blocks)) {
-      if (block.type === 'heading') content.push(item(`<h3>${inline(block.text)}</h3>`));
-      else if (block.type === 'slot') {
+      if (block.type === 'heading') {
+        const level = (block.level ?? 4) - 1;
+        content.push(item(`<h${level}>${inline(block.text)}</h${level}>`));
+      } else if (block.type === 'slot') {
         const slot = asArray(chapter.slots).find((entry) => entry.slot === block.id);
         if (!slot) throw new Error(`缺少叙述位 ${block.id}`);
-        const body = [item(`<h2>${inline(slot.title)}</h2>`), ...markdownXml(view.text(slot.draft))];
+        const body = [...(slot.heading === false ? [] : [item(`<h2>${inline(slot.title)}</h2>`)]), ...markdownXml(view.text(slot.draft))];
         content.push(block.id === 'exec.global' ? item(`<callout emoji="📝">${body.map((entry) => entry.xml).join('\n')}</callout>`, 1 + body.reduce((sum, entry) => sum + entry.blocks, 0)) : body);
       } else if (block.type === 'table') {
         if (isProduct(block.id)) continue;

@@ -5,7 +5,10 @@ Strategic Analytics 是由战略组开发，面向公司内部有外部市场调
 
 可通过 Codex、Claude Code 和 WorkBuddy 接入，共用同一套分析方法与季报流程。
 
-当前版本：[0.3.3](https://github.com/ccchenhuohuo/strategic-plugin/releases/tag/v0.3.3)。
+当前版本：[0.3.4](https://github.com/ccchenhuohuo/strategic-plugin/releases/tag/v0.3.4)。
+**发布状态：0.3.4 已正式发布。**
+
+0.3.4 更新包括权威宽表与新版三级类目、金额和价格换汇精度、响应体积门禁，以及支撑类、灯光类、音视频类三重点季报。具体能力与验收边界见[更新记录](CHANGELOG.md)及[本版验收说明](docs/ACCEPTANCE-0.3.4.md)。
 
 ## 可以做什么
 
@@ -19,7 +22,7 @@ Strategic Analytics 是由战略组开发，面向公司内部有外部市场调
 
 ## 安装
 
-安装前向战略组申请数据访问令牌。生成季报需要本机安装 Node.js ≥ 18。
+安装前先向战略组申请数据访问令牌。生成季报需要本机安装 Node.js ≥ 18。
 完整配置步骤见[安装指南](docs/INSTALL.md)。
 
 ### Codex
@@ -58,6 +61,8 @@ codex plugin add strategic-analytics@strategic
 安装后先说：
 
 > 检查战略大盘插件的连接，告诉我数据覆盖范围和可用月份。
+
+仅支持 OAuth 的 ChatGPT / Dot 网页连接器不在当前接入范围；MCP OAuth 开发已停止，继续使用上述 Bearer 接入。季报的飞书云文档同步不受影响。
 
 ## 开始使用
 
@@ -111,4 +116,4 @@ SPU／验收问题先说明上述边界。仅当当前环境确有相关项目�
 - [安装、配置、更新与故障处理](docs/INSTALL.md)
 - [版本发布说明](https://github.com/ccchenhuohuo/strategic-plugin/releases) · [更新记录](CHANGELOG.md)
 - [插件架构](docs/ARCHITECTURE.md)
-- [实际验收范围](docs/ACCEPTANCE-0.3.3.md)
+- [本版验收范围](docs/ACCEPTANCE-0.3.4.md) · [0.3.3 历史验收](docs/ACCEPTANCE-0.3.3.md)

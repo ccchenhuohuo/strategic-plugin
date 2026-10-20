@@ -81,6 +81,10 @@ export async function captureInputs(runDir, options = {}) {
       if (slot.digest !== undefined) await take(slot.digest);
     }
   }
+  for (const table of Array.isArray(manifest.writing_tables) ? manifest.writing_tables : []) {
+    await take(table.path);
+    await take(`tables/${safeName(table.table_id)}.json`);
+  }
   // A bad ledger remains captured; render/check will report its parse failure.
   let ledger = [];
   try { ledger = text('ledger.jsonl', true).split(/\r?\n/u).filter((line) => line.trim()).map((line) => JSON.parse(line)); } catch {}
