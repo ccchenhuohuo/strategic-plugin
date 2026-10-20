@@ -1,23 +1,7 @@
-import { createHash } from 'node:crypto';
-import fs from 'node:fs/promises';
-import { validInputBinding } from './input-view.mjs';
+import { inputSnapshot, validInputBinding } from './input-view.mjs';
 
-const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const sameStat = (a, b) => ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].every((key) => a[key] === b[key]);
-
-/** Hash the bytes actually read, rejecting replacement or mutation during the read. */
 export async function reportSnapshot(path) {
-  const before = await fs.lstat(path, { bigint: true });
-  if (!before.isFile() || before.isSymbolicLink()) throw new Error('report.md 不是普通文件');
-  const bytes = await fs.readFile(path);
-  const after = await fs.lstat(path, { bigint: true });
-  if (!sameStat(before, after)) throw new Error('report.md 在读取期间发生变化');
-  return { bytes, stat: after, sha256: sha(bytes) };
-}
-
-export async function assertReportUnchanged(path, snapshot) {
-  const current = await reportSnapshot(path);
-  if (!sameStat(snapshot.stat, current.stat) || current.sha256 !== snapshot.sha256) throw new Error('report.md 在校验或发布期间发生变化，请重新 assemble / check');
+  return inputSnapshot(path, { required: true, label: 'report.md' });
 }
 
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);

@@ -1,6 +1,6 @@
 {
   "name": "strategic-analytics",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "战略大盘分析：14 个受治理只读 MCP 工具；共用分析与季报 Skill、配对连接和确定性脚本，数字附复现戳与口径警示。",
   "author": {
     "name": "chenyu"
@@ -19,7 +19,7 @@
   "mcpServers": {
     "strategic": {
       "type": "http",
-      "url": "https://voc.ulanzi.com:28081/flywheel/mcp",
+      "url": "https://voc.ulanzi.com:28081/strategy/mcp",
       "bearer_token_env_var": "STRATEGIC_MCP_TOKEN"
     }
   },

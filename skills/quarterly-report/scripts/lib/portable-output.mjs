@@ -36,5 +36,3 @@ export async function captureHookOutput(path, token) {
     },
   };
 }
-
-export async function readHookOutput(path, token) { return (await captureHookOutput(path, token)).output; }

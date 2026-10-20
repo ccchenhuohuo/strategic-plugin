@@ -5,10 +5,9 @@ Strategic Analytics 是由战略组开发，面向公司内部有外部市场调
 
 可通过 Codex、Claude Code 和 WorkBuddy 接入，共用同一套分析方法与季报流程。
 
-当前版本：[0.3.4](https://github.com/ccchenhuohuo/strategic-plugin/releases/tag/v0.3.4)。
-**发布状态：0.3.4 已正式发布。**
+当前版本：[0.3.5](https://github.com/ccchenhuohuo/strategic-plugin/releases/tag/v0.3.5)。
 
-0.3.4 更新包括权威宽表与新版三级类目、金额和价格换汇精度、响应体积门禁，以及支撑类、灯光类、音视频类三重点季报。具体能力与验收边界见[更新记录](CHANGELOG.md)及[本版验收说明](docs/ACCEPTANCE-0.3.4.md)。
+生产 Bearer 入口已迁到 `/strategy/mcp`，旧 `/flywheel/mcp` 已停用且不重定向。升级插件后，请同步检查曾保存或手工配置的服务地址，原访问令牌不变。此版在保持分析能力、季报规则与安全门禁的前提下收敛重复实现，不重新发布数据。迁移步骤见[安装指南](docs/INSTALL.md#从-034-及以前迁移到-035)，实际验证及未覆盖项见 [0.3.5 验收说明](docs/ACCEPTANCE-0.3.5.md)和[更新记录](CHANGELOG.md)。
 
 ## 可以做什么
 
@@ -116,4 +115,4 @@ SPU／验收问题先说明上述边界。仅当当前环境确有相关项目�
 - [安装、配置、更新与故障处理](docs/INSTALL.md)
 - [版本发布说明](https://github.com/ccchenhuohuo/strategic-plugin/releases) · [更新记录](CHANGELOG.md)
 - [插件架构](docs/ARCHITECTURE.md)
-- [本版验收范围](docs/ACCEPTANCE-0.3.4.md) · [0.3.3 历史验收](docs/ACCEPTANCE-0.3.3.md)
+- [0.3.5 验收范围](docs/ACCEPTANCE-0.3.5.md) · [0.3.4 数据切源验收](docs/ACCEPTANCE-0.3.4.md) · [0.3.3 历史验收](docs/ACCEPTANCE-0.3.3.md)

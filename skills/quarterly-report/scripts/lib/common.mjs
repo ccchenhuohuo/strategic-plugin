@@ -99,4 +99,3 @@ export const shown = (object, path) => {
   return typeof result === 'string' ? result : null;
 };
 export const cell = (item) => item === null || item === undefined || item === '' ? '—' : String(item);
-export const statusCell = (item) => cell(item).replaceAll('|', '\\|').replaceAll('\n', ' ');

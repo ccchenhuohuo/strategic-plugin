@@ -76,14 +76,13 @@ def render(spec, attempt):
                 cursor = target+th/2+6
         fig.canvas.draw()
         all_labels = labels + [item[2] for item in exterior]
-        bounds = tuple(ax.get_window_extent(renderer).extents)
         inverse = ax.transData.inverted()
         for side, midpoint, t in exterior:
             box = t.get_window_extent(renderer)
             source = tuple(ax.transData.transform((-.09 if side == 0 else 1.09, midpoint)))
             target = (box.x1+3 if side == 0 else box.x0-3, (box.y0+box.y1)/2)
             boxes = [tuple(other.get_window_extent(renderer).extents) for other in all_labels if other is not t]
-            route = inverse.transform(connector_route(source, target, boxes, bounds))
+            route = inverse.transform(connector_route(source, target, boxes))
             line, = ax.plot(route[:, 0], route[:, 1], color="#888888", lw=.6, zorder=3)
             line._fw_connector = True
             line._fw_owner_text = t

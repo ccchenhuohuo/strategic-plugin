@@ -2,7 +2,6 @@
 import math
 from itertools import combinations, islice
 
-from matplotlib import pyplot as plt
 from matplotlib.ticker import FixedLocator, MaxNLocator
 
 from audit import (CONNECTOR_BUBBLE_GAP_PX, REFLINE_RUN_PX, connector_crossing,
@@ -26,7 +25,7 @@ def hit_segment(a, b, box):
     return hi > 0 and lo < 1
 
 
-def connector_route(start, end, boxes, bounds):
+def connector_route(start, end, boxes):
     """Short direct/single-elbow leaders for narrow price-band labels."""
     obstacles = [(b[0]-5, b[1]-5, b[2]+5, b[3]+5) for b in boxes]
     for route in ([start, end], [start, (start[0], end[1]), end],

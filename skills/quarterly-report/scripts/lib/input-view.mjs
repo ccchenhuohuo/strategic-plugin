@@ -16,15 +16,15 @@ export async function assertInputCopy(runDir, path, sha256) {
   if (copy?.sha256 !== sha256) throw new Error(`发布计划副本哈希不符或缺失：${path}`);
 }
 
-/** One read of each material's bytes. Later reads are stability probes only. */
-export async function inputSnapshot(path) {
+/** 每份输入只消费一次原始字节；后续读取仅用于稳定性检查。 */
+export async function inputSnapshot(path, { required = false, label = path } = {}) {
   let before;
   try { before = await fs.lstat(path, { bigint: true }); }
-  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  if (!before.isFile() || before.isSymbolicLink()) throw new Error(`${path} 不是普通文件`);
+  catch (error) { if (error.code === 'ENOENT' && !required) return null; throw error; }
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error(`${label} 不是普通文件`);
   const bytes = await fs.readFile(path);
   const after = await fs.lstat(path, { bigint: true });
-  if (!sameStat(before, after)) throw new Error(`${path} 在读取期间发生变化`);
+  if (!sameStat(before, after)) throw new Error(`${label} 在读取期间发生变化`);
   return { bytes, stat: after, sha256: sha(bytes) };
 }
 

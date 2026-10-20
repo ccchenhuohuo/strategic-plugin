@@ -36,34 +36,24 @@ fi
 # 桌面应用的 PATH 往往不包含用户级 npm 目录。只检查可执行文件，绝不运行。
 lark_cli=
 candidate=$(command -v lark-cli 2>/dev/null) || candidate=
-if [ -n "$candidate" ] && [ -f "$candidate" ] && [ -x "$candidate" ]; then
-  case $candidate in
-    /*) lark_cli=$candidate ;;
-    *)
-      candidate=$PWD/$candidate
-      lark_cli=$(cd -P "${candidate%/*}" 2>/dev/null && printf '%s/%s' "$PWD" "${candidate##*/}") || lark_cli=
-      ;;
-  esac
-fi
-if [ -z "$lark_cli" ]; then
-  for candidate in \
-    "${HOME:-}/.npm-global/bin/lark-cli" \
-    "${HOME:-}/.local/bin/lark-cli" \
-    /opt/homebrew/bin/lark-cli \
-    /usr/local/bin/lark-cli
-  do
-    if [ -f "$candidate" ] && [ -x "$candidate" ]; then
-      case $candidate in
-        /*) lark_cli=$candidate ;;
-        *)
-          candidate=$PWD/$candidate
-          lark_cli=$(cd -P "${candidate%/*}" 2>/dev/null && printf '%s/%s' "$PWD" "${candidate##*/}") || lark_cli=
-          ;;
-      esac
-      [ -n "$lark_cli" ] && break
-    fi
-  done
-fi
+for candidate in \
+  "$candidate" \
+  "${HOME:-}/.npm-global/bin/lark-cli" \
+  "${HOME:-}/.local/bin/lark-cli" \
+  /opt/homebrew/bin/lark-cli \
+  /usr/local/bin/lark-cli
+do
+  if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+    case $candidate in
+      /*) lark_cli=$candidate ;;
+      *)
+        candidate=$PWD/$candidate
+        lark_cli=$(cd -P "${candidate%/*}" 2>/dev/null && printf '%s/%s' "$PWD" "${candidate##*/}") || lark_cli=
+        ;;
+    esac
+    [ -n "$lark_cli" ] && break
+  fi
+done
 
 umask 077
 mkdir -p "$dir" 2>/dev/null || exit 0
