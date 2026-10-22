@@ -1,4 +1,5 @@
 """Policy-ordered paired stacks, connecting polygons, growth column and ASP row."""
+import math
 from matplotlib.patches import Polygon, Rectangle
 from layout import connector_route
 from style import COLORS, DPI, MAX_WIDTH_IN, make_figure, measure, number
@@ -7,17 +8,20 @@ LAYOUTS = ["measured-share-labels", "tall-share-labels", "higher-share-labels"]
 
 
 def render(spec, attempt):
-    width, height = MAX_WIDTH_IN[spec["kind"]], [9.2, 11, 13][attempt]
+    # Keep the established width; seven scopes use a fixed four-column grid.
+    scopes = len(spec["ranges"])
+    columns = 4 if scopes > 5 else max(scopes, 1)
+    rows = max(1, math.ceil(scopes/columns))
+    width, height = MAX_WIDTH_IN[spec["kind"]], [9.2, 11, 13][attempt] + (rows-1)*7
     fig, (top, bottom) = make_figure(spec, width, height, ["未标注的档位数值见表 " + spec["before_table"]])
     # A missing policy member does not shift colors of subsequent observed bands.
     color_by_band = {band["name"]: COLORS[i % 10] for i, band in enumerate(spec["bands"])}
     w, h = fig.get_size_inches()*DPI
     legend_width = max([measure(fig, b["name"], 10)[0] for b in spec["bands"]]+[80])+52
     left, usable = 40+legend_width, w-80-legend_width
-    scopes = len(spec["ranges"])
-    scopewidth = usable/max(scopes, 1)
-    plotbottom = bottom+98
-    plotheight = h-top-plotbottom-90
+    scopewidth = usable/columns
+    basebottom, rowgap = bottom+98, 160
+    plotheight = (h-top-basebottom-90-(rows-1)*rowgap)/rows
     legend_x = 44
     for i, band in enumerate(spec["bands"]):
         y = h-top-28-i*39
@@ -25,7 +29,9 @@ def render(spec, attempt):
         fig.text((legend_x+24)/w, y/h, band["name"], fontsize=10, va="center")
     issues = []
     for index, scope in enumerate(spec["ranges"]):
-        x = left+index*scopewidth
+        row, column = divmod(index, columns)
+        x = left+column*scopewidth
+        plotbottom = basebottom+(rows-1-row)*(plotheight+rowgap)
         panelwidth = scopewidth*.57
         ax = fig.add_axes([x/w, plotbottom/h, (panelwidth-15)/w, plotheight/h])
         ax.set_xlim(-.35, 1.35)

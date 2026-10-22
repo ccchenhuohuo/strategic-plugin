@@ -143,7 +143,7 @@ export async function runLocalSetup(adapter = {}) {
   console.log(JSON.stringify(redact({ ok: true, ...output, feishu: output.feishu_output ? 1 : 0,
     data_dir: dataDir, preferences: prefsPath, runs_dir: runsDir, chart_env: chartEnv, output_env: outputEnv,
     ...binding,
-    report_script: join(dirname(ENTRY), 'report.mjs'), config: join(dirname(dirname(ENTRY)), 'config/vijim-default.json'),
+    report_script: join(dirname(ENTRY), 'report.mjs'), config: join(dirname(dirname(ENTRY)), 'config/vijim-default-v1.7.json'),
     connection: adapter.connection ? adapter.connection(declaration, values) : { verified: Boolean(declaration), verification_scope: declaration ? 'host_mcp_config' : null, host_mcp_config_verified: Boolean(declaration), ...(declaration ? { url: declaration.endpoint, auth_env: declaration.auth_env } : {}), token_present: Boolean(process.env.STRATEGIC_MCP_TOKEN) },
   })));
 }

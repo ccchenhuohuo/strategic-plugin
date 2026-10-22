@@ -1,6 +1,7 @@
 import { appendFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { clean, digest, eid, json, safeName, unique, writeArtifact } from './common.mjs';
+import { assertReportRecord } from './report-scope.mjs';
 
 const GROWTH = 'strategic_market_growth';
 const PRICE = 'strategic_price_band_distribution';
@@ -133,6 +134,7 @@ export async function executeStage(client, stage, context) {
       const args = { ...call.arguments, ...(releaseId ? { release_id: releaseId } : {}) };
       const reused = context.resume && runDir ? await reusableEvidence(runDir, call, args) : null;
       if (reused) {
+        if (context.scopeSnapshot) assertReportRecord(reused, context.scopeSnapshot);
         results.set(call.key, { ...call, ...reused });
         console.error(clean(`${call.id} ${call.key}: reused`, secret));
         continue;
@@ -143,6 +145,7 @@ export async function executeStage(client, stage, context) {
         const envelope = clean(await client.call(call.tool, args), secret);
         const observedRelease = envelope.stamp?.release_id;
         if (releaseId && observedRelease !== releaseId) throw new Error(`release_id 不一致：预期 ${releaseId}，返回 ${observedRelease ?? '缺失'}`);
+        if (context.scopeSnapshot) assertReportRecord({ tool: call.tool, arguments: args, envelope }, context.scopeSnapshot);
         record = { id: call.id, tool: call.tool, arguments: args, ok: true, envelope, called_at: calledAt };
       } catch (error) {
         record = { id: call.id, tool: call.tool, arguments: args, ok: false, error: { message: clean(error.message ?? String(error), secret), ...(error.code ? { code: error.code } : {}) }, called_at: calledAt };

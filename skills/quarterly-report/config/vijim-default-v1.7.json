@@ -1,0 +1,52 @@
+{
+  "$comment": "战略季报绑定范围配置（0.3.6 本地候选，未部署、未发行；最低脚本 0.3.6）。sites 从 data_status 的同代冻结合同解析，不从实际观察或本文件标签推断纳入范围；cn 合并淘天。保留历史 vijim-default.json，不修改旧运行的 config_digest。三个重点及全市场分母不变；用户已于 2026-10-21 确认 MX/BR 四个价格、金额字段使用完整 MXN/BRL 单位及推送月完整交付，固定价格带已批准，本次截止月沿用 2026-09。本地政策激活不等于真实数据已构建或生产已生效；真实验收、生产、公开发行及正式宿主升级仍待相应门禁与最终确认，季报 Workflow 不在本轮验收范围。",
+  "config_version": "1.7.0",
+  "report_name": "CMI全球市场洞察报告",
+  "sites": "bound_release",
+  "site_order": ["cn", "US", "DE", "JP", "MX", "BR"],
+  "site_labels": { "cn": "中国淘天", "US": "美国Amazon", "DE": "德国Amazon", "JP": "日本Amazon", "MX": "墨西哥Amazon", "BR": "巴西Amazon" },
+  "compare": ["yoy", "prior_period"],
+  "company_brands": ["ULANZI/优篮子", "FALCAM/小隼", "Ulanzi&FALCAM"],
+  "drilldown": { "competitor_brands": 5, "products_per_brand": 5, "company_products_per_brand": 5 },
+  "focus": [
+    {
+      "section_no": 3,
+      "std_l1": "支撑类",
+      "trend_segments": [
+        { "label": "脚架", "paths": [{ "std_l1": "支撑类", "std_l2": "脚架" }] },
+        { "label": "汽车支架", "paths": [{ "std_l1": "支撑类", "std_l2": "汽车支架" }] },
+        { "label": "口袋支架", "paths": [{ "std_l1": "支撑类", "std_l2": "口袋支架" }] },
+        { "label": "悬臂支架", "paths": [{ "std_l1": "支撑类", "std_l2": "悬臂支架" }] },
+        { "label": "穿戴支架", "paths": [{ "std_l1": "支撑类", "std_l2": "穿戴支架" }] },
+        { "label": "自拍杆", "paths": [{ "std_l1": "支撑类", "std_l2": "自拍杆" }] },
+        { "label": "灯架", "paths": [{ "std_l1": "支撑类", "std_l2": "灯架" }] }
+      ],
+      "competition_segments": ["脚架", "汽车支架", "口袋支架", "悬臂支架"],
+      "price_mix_by": "std_l2"
+    },
+    {
+      "section_no": 4,
+      "std_l1": "灯光类",
+      "trend_segments": [
+        { "label": "环形灯", "paths": [{ "std_l1": "灯光类", "std_l2": "摄影补光灯", "std_l3": "环形灯" }] },
+        { "label": "平板灯", "paths": [{ "std_l1": "灯光类", "std_l2": "摄影补光灯", "std_l3": "平板灯" }] },
+        { "label": "COB补光灯", "paths": [{ "std_l1": "灯光类", "std_l2": "摄影补光灯", "std_l3": "COB补光灯" }] },
+        { "label": "口袋灯/手机便携补光灯", "paths": [{ "std_l1": "灯光类", "std_l2": "摄影补光灯", "std_l3": "口袋灯" }, { "std_l1": "灯光类", "std_l2": "手机便携补光灯" }] },
+        { "label": "棒灯", "paths": [{ "std_l1": "灯光类", "std_l2": "摄影补光灯", "std_l3": "棒灯" }] },
+        { "label": "摄影手电", "paths": [{ "std_l1": "灯光类", "std_l2": "摄影补光灯", "std_l3": "摄影手电" }] }
+      ],
+      "competition_segments": ["环形灯", "平板灯", "COB补光灯", "口袋灯/手机便携补光灯", "棒灯"],
+      "price_mix_by": "std_l2"
+    },
+    {
+      "section_no": 5,
+      "std_l1": "音视频类",
+      "trend_segments": [
+        { "label": "麦克风", "paths": [{ "std_l1": "音视频类", "std_l2": "麦克风" }] },
+        { "label": "自拍屏", "paths": [{ "std_l1": "音视频类", "std_l2": "自拍屏" }] }
+      ],
+      "competition_segments": ["麦克风"],
+      "price_mix_by": "std_l2"
+    }
+  ]
+}

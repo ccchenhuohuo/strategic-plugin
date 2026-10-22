@@ -9,10 +9,12 @@ LAYOUTS = ["measured-matrix-short-leaders", "grid-matrix-short-leaders", "tall-g
 
 def render(spec, attempt):
     # A failed row becomes a two-column grid; later retries only add height.
-    grid = spec["layout"] == "grid" or attempt > 0
+    configured_grid = spec["layout"] == "grid" or len(spec["panels"]) > 4
+    grid = configured_grid or attempt > 0
     width = MAX_WIDTH_IN[spec["kind"]]
-    grid_retry = attempt if spec["layout"] == "grid" else max(0, attempt-1)
-    height = (11.5 + grid_retry*3) if grid else 7.8
+    grid_retry = attempt if configured_grid else max(0, attempt-1)
+    panel_rows = math.ceil(len(spec["panels"])/2) if grid else 1
+    height = (11.5 + max(0, panel_rows-2)*5 + grid_retry*3) if grid else 7.8
     fig, (top, bottom) = make_figure(spec, width, height)
     fig._fw_panel_layout = "grid" if grid else "row"
     w, h = fig.get_size_inches() * DPI

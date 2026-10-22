@@ -5,7 +5,8 @@ import { competitionSegments } from './plan.mjs';
 import { parseMarkdownTable, TABLE_READING_NOTES, tableJson, validateTable } from './tables.mjs';
 import { captureInputs } from './input-view.mjs';
 import { writeRunManifest } from './run-binding.mjs';
-import { sourceContract } from './source-contract.mjs';
+import { sourceContract, retainsCategoryOthers } from './source-contract.mjs';
+import { assertReportRecord, scopeMarker } from './report-scope.mjs';
 import { digestVisibleNumbers, evidenceCaveats, OBSERVATION_RULE, projectObservations, sectionCaveats } from './writing-observations.mjs';
 
 const tablePath = (id) => `tables/${safeName(id)}.md`;
@@ -34,7 +35,9 @@ export function dataNote(status, config, label, windows, caveats) {
   const contract = sourceContract(stamp);
   const sourceNotes = contract === 'direct_wide' ? [
     `来源合同：权威宽表 flywheel.monthly_sales_wide 直供销售与三级标准类目；source_wide_update_time ${stamp.source_wide_update_time ?? '未提供'}。完整月以交付确认水位为准，不从源表最大月份推定完整性。`,
-    '分类范围：标准类目任一级含「其他」、NULL、空串或纯空白的整条记录排除，以 excluded_unclassified_rows 披露；不作为未观察节点补零。此规则不检查品牌、标题或平台原始类目，品牌非品牌桶仍在分母中。',
+    retainsCategoryOthers(stamp)
+      ? '分类范围：一级含「其他」等兜底标签或任一级 NULL、空串、空白的整条记录排除，以 excluded_unclassified_rows 披露；有效一级下已登记的二、三级「其他」保留原桶，计入全市场与对应父级的金额、销量及份额分母。展示隐藏不缩小分母，未单列的合法桶归入范围内 remainder，不强分给具体子类。未知路径由字典闭包阻断，不自动归入其他。规则不检查品牌、标题、平台原始类目或属性，品牌非品牌桶仍在分母中；范围排除不作未观察补零。'
+      : '分类范围：标准类目任一级含「其他」、NULL、空串或纯空白的整条记录排除，以 excluded_unclassified_rows 披露；不作为未观察节点补零。此规则不检查品牌、标题或平台原始类目，品牌非品牌桶仍在分母中。',
     `上游状态：${data.upstream?.status ?? 'unknown'}；宽表更新可能重述销售与商品归类；确认新源交付完成并重建发布后才跟进。`,
   ] : contract === 'legacy_derived' ? [
     `来源合同：历史宽表与年度类目维表 JOIN 的旧派生链；仅保留冻结戳 wide ${stamp.source_wide_update_time ?? '未提供'}、dim ${stamp.upstream_dim_update_time ?? '未提供'}、derived ${stamp.source_derived_update_time ?? '未提供'}，不做旧来源的当前核验。`,
@@ -228,7 +231,12 @@ function slotTables(slot, manifest, tables, focuses) {
   return drilldowns.flatMap((item) => item.table_ids.map((id) => tables.get(id)));
 }
 
-export function buildWritingDigests(manifest, tables, results, focuses) {
+export function buildWritingDigests(manifest, tables, results, focuses, snapshot) {
+  if (manifest.scope_binding || snapshot) {
+    if (!snapshot || JSON.stringify(manifest.scope_binding) !== JSON.stringify(scopeMarker(snapshot))) throw new Error('摘要的 resolved 配置绑定缺失或不一致');
+    for (const record of results.values()) if (record.ok) assertReportRecord(record, snapshot);
+    for (const table of tables.values()) if (JSON.stringify(table.scope_binding) !== JSON.stringify(manifest.scope_binding)) throw new Error(`摘要表 ${table.id} 的 resolved 配置绑定不一致`);
+  }
   const digests = new Map();
   const byEvidence = new Map([...results.values()].map((record) => [record.id, record]));
   const winOf = (entry) => (entry ? { start: entry.start, end: entry.end } : null);
@@ -247,6 +255,7 @@ export function buildWritingDigests(manifest, tables, results, focuses) {
     if (manifest.writing_observations !== true) {
       digest.notes = unique([...related.flatMap((table) => table.notes).filter((note) => !TABLE_READING_NOTES.includes(note)), ...related.map((table) => table.reason).filter(Boolean), ...sectionCaveats(caveats)]);
     }
+    if (manifest.scope_binding) digest.scope_binding = manifest.scope_binding;
     const output = compactDigest(digest);
     if (manifest.writing_observations === true) {
       if (JSON.stringify(slot.observation_tables) !== JSON.stringify(related.map((table) => table.id))) throw new Error(`叙述位观察范围不一致：${slot.slot}`);
@@ -265,9 +274,9 @@ export function serializeDigest(digest) {
   return text;
 }
 
-export async function writeArtifacts(runDir, manifest, tables, results, focuses, noteText) {
+export async function writeArtifacts(runDir, manifest, tables, results, focuses, noteText, snapshot) {
   // Preflight every digest before replacing any previous valid material/identity.
-  const digests = [...buildWritingDigests(manifest, tables, results, focuses)].map(([path, digest]) => [path, serializeDigest(digest)]);
+  const digests = [...buildWritingDigests(manifest, tables, results, focuses, snapshot)].map(([path, digest]) => [path, serializeDigest(digest)]);
   await mkdir(join(runDir, 'drafts'), { recursive: true });
   await writeArtifact(runDir, manifest.data_note, noteText);
   const usedIds = unique([...manifest.chapters.flatMap((chapter) => chapter.tables.map((item) => item.table_id)), ...asArray(manifest.writing_tables).map((item) => item.table_id)]);

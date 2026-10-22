@@ -5,9 +5,11 @@ Strategic Analytics 是由战略组开发，面向公司内部有外部市场调
 
 可通过 Codex、Claude Code 和 WorkBuddy 接入，共用同一套分析方法与季报流程。
 
-当前版本：[0.3.5](https://github.com/ccchenhuohuo/strategic-plugin/releases/tag/v0.3.5)。
+**正式版本：0.3.6**（2026-10-22 发行）。墨西哥、巴西已随本轮生产生效，公共 MCP 维护绑定已解除；生产执行与独立验收见 [0.3.6 真实验收说明](docs/ACCEPTANCE-0.3.6.md)。
 
-生产 Bearer 入口已迁到 `/strategy/mcp`，旧 `/flywheel/mcp` 已停用且不重定向。升级插件后，请同步检查曾保存或手工配置的服务地址，原访问令牌不变。此版在保持分析能力、季报规则与安全门禁的前提下收敛重复实现，不重新发布数据。迁移步骤见[安装指南](docs/INSTALL.md#从-034-及以前迁移到-035)，实际验证及未覆盖项见 [0.3.5 验收说明](docs/ACCEPTANCE-0.3.5.md)和[更新记录](CHANGELOG.md)。
+0.3.6 在本地激活并生产生效墨西哥、巴西的站点与固定价格政策，保留按实际绑定代次解释范围的规则。范围与未覆盖门禁见 [0.3.6 真实验收说明](docs/ACCEPTANCE-0.3.6.md)和[更新记录](CHANGELOG.md)。**季报 Workflow 及其验收不在本轮范围。**
+
+正式 Bearer 入口继续使用 `/strategy/mcp`，访问 URL、原令牌和认证方式不变，不恢复 OAuth。0.3.5 已停用旧 `/flywheel/mcp` 且不重定向；从更早版本升级时请检查曾保存或手工配置的地址，步骤见[安装指南](docs/INSTALL.md#从-034-及以前迁移到-035)，历史验证见 [0.3.5 验收说明](docs/ACCEPTANCE-0.3.5.md)。
 
 ## 可以做什么
 
@@ -17,7 +19,9 @@ Strategic Analytics 是由战略组开发，面向公司内部有外部市场调
 - **季度洞察报告**：生成执行摘要、市场扫描和重点类目分析，附图表及数据引用。
 - **报告收录与同步**：保存本地 Markdown、图表和历史版本，也可同步为飞书云文档及附表。
 
-电商数据范围包括中国淘天及美国、德国、日本 Amazon 的已纳入类目；具体覆盖与可用月份以查询结果为准。
+电商范围按实际绑定的 `release_id/build_id` 解释，不按插件版本猜测。旧 pair 仍为中国淘天（Taobao、Tmall 两组合）及美国、德国、日本 Amazon，共五组合；0.3.6 新增墨西哥、巴西 Amazon 后为六国七组合。原五组合历史从 2024-01 起，MX/BR 从 2025-10 起；用户已确认完整 MXN/BRL 单位及推送月完整交付，固定价格边界已批准，本次截止月沿用 2026-09。
+
+只有实际绑定新七组合数据时，全球 2026Q3 当期及对 2026Q2 的环比才按新范围解释；其对 2025Q3 的全球同比因 MX/BR 基期缺失为 null，相关份额变化、贡献与分解同样不能成立。不补零、不暗缩为旧五组合；当前可查询范围与覆盖仍以服务端响应为准。
 
 ## 安装
 
@@ -115,4 +119,4 @@ SPU／验收问题先说明上述边界。仅当当前环境确有相关项目�
 - [安装、配置、更新与故障处理](docs/INSTALL.md)
 - [版本发布说明](https://github.com/ccchenhuohuo/strategic-plugin/releases) · [更新记录](CHANGELOG.md)
 - [插件架构](docs/ARCHITECTURE.md)
-- [0.3.5 验收范围](docs/ACCEPTANCE-0.3.5.md) · [0.3.4 数据切源验收](docs/ACCEPTANCE-0.3.4.md) · [0.3.3 历史验收](docs/ACCEPTANCE-0.3.3.md)
+- [0.3.6 真实验收](docs/ACCEPTANCE-0.3.6.md) · [0.3.5 历史验收](docs/ACCEPTANCE-0.3.5.md) · [0.3.4 数据切源验收](docs/ACCEPTANCE-0.3.4.md) · [0.3.3 历史验收](docs/ACCEPTANCE-0.3.3.md)

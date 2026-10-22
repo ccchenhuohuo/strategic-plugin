@@ -8,6 +8,8 @@ import { asArray, digest, readJson, redact, safeName, unique, writeJson } from '
 import { readTable } from './tables.mjs';
 import { clientEnv, withoutMcpTokens } from './environment.mjs';
 import { sourceContract } from './source-contract.mjs';
+import { readReportConfig, reportSourceCoverage, sourceCoverageNotes } from './report-scope.mjs';
+import { captureInputs } from './input-view.mjs';
 
 const chartDir = fileURLToPath(new URL('../charts/', import.meta.url));
 const GROWTH = 'strategic_market_growth', PRICE = 'strategic_price_band_distribution', BRAND = 'strategic_brand_view';
@@ -55,20 +57,24 @@ export async function buildChartSpecs(runDir) {
     }
   }
   if (new Set(planned.map((chart) => chart.id)).size !== planned.length) throw new Error('运行目录损坏：manifest 中图表锚点重复');
-  let config = null, configError = null;
+  let config = null, configError = null, view = null;
+  const allEvidence = [];
   try {
-    const args = await readJson(join(runDir, 'run-args.json'));
-    if (typeof args.config !== 'string' || !args.config_digest) throw new Error('run-args.json 缺少配置路径或 config_digest');
-    config = await readJson(resolve(runDir, args.config));
-    if (digest(config) !== args.config_digest) throw new Error('配置摘要与 run-args.json 的 config_digest 不一致，配置自取数后已变更');
+    const restored = await readReportConfig(runDir);
+    config = restored.config;
+    if (restored.snapshot) {
+      view = await captureInputs(runDir, { report: false });
+      config = view.json('resolved-config.json').config;
+      for (const entry of view.text('ledger.jsonl').split(/\r?\n/u).filter(Boolean).map(JSON.parse)) {
+        allEvidence.push(entry.ok ? view.json(`evidence/${entry.id}.json`) : await readJson(join(runDir, 'evidence', `${entry.id}.json`)));
+      }
+    } else {
+      const names = (await readdir(join(runDir, 'evidence'))).filter((name) => /^E\d+\.json$/u.test(name)).sort();
+      for (const name of names) allEvidence.push(await readJson(join(runDir, 'evidence', name)));
+    }
     if (!Array.isArray(config.sites) || !config.site_labels || !Array.isArray(config.focus)) throw new Error('配置缺少 sites/site_labels/focus');
     if (config.sites.some((site) => typeof site !== 'string' || typeof config.site_labels[site] !== 'string')) throw new Error('配置中的站点与 site_labels 不完整');
   } catch (error) { configError = `无法核验运行配置：${error.message}`; }
-  const allEvidence = [];
-  if (!configError) {
-    const names = (await readdir(join(runDir, 'evidence'))).filter((name) => /^E\d+\.json$/u.test(name)).sort();
-    for (const name of names) allEvidence.push(await readJson(join(runDir, 'evidence', name)));
-  }
   const siteName = (site) => config?.site_labels?.[site] ?? site;
   const charts = [];
   for (const plan of planned) {
@@ -98,6 +104,10 @@ export async function buildChartSpecs(runDir) {
         if (matches[0].envelope?.stamp?.release_id !== manifest.release_id) throw new Error(`${matches[0].id} release_id 与报告不一致`);
         if (matches[0].arguments?.current_start !== manifest.windows.current.start || matches[0].arguments?.current_end !== manifest.windows.current.end) throw new Error(`${matches[0].id} 取数窗口与报告不一致`);
         if (!asArray(matches[0].arguments?.compare).includes('yoy')) throw new Error(`${matches[0].id} 未取同比窗口`);
+        const coverage = sourceCoverageNotes(matches[0].envelope, config);
+        chart.notes.push(...coverage);
+        const yoyCoverage = reportSourceCoverage(matches[0].envelope).yoy;
+        if (plan.kind !== 'segment_matrix' && yoyCoverage && yoyCoverage.status !== 'complete') throw new Error(`同比比较基础不可用；${coverage.join('；')}`);
         return matches[0];
       };
       if (plan.kind === 'category_bubble') {
@@ -114,7 +124,7 @@ export async function buildChartSpecs(runDir) {
       } else if (plan.kind === 'segment_matrix') {
         if (!focus) throw new Error('配置中找不到该章分段定义');
         const record = select((item) => sameGroup(item, ['segment', 'site']) && windowCall(item) && item.arguments?.currency === 'cny', '分段×站点 CNY 证据');
-        chart.evidence = [record.id]; chart.segments = focus.trend_segments.map((segment) => display(segment.label, 'trend_segments.label')); chart.layout = chart.segments.length > 4 ? 'grid' : 'row'; chart.panels = [];
+        chart.evidence = [record.id]; chart.segments = focus.trend_segments.map((segment) => display(segment.label, 'trend_segments.label')); chart.layout = chart.segments.length > 4 || config.sites.length > 4 ? 'grid' : 'row'; chart.panels = [];
         for (const site of config.sites) {
           const panel = { site, name: siteName(site), points: [] };
           chart.panels.push(panel);
@@ -179,6 +189,7 @@ export async function buildChartSpecs(runDir) {
     }
     chart.notes = unique(chart.notes);
   }
+  if (view && !configError) await view.assertUnchanged();
   return { version: 1, label: manifest.label, release_id: manifest.release_id, windows: manifest.windows, charts };
 }
 

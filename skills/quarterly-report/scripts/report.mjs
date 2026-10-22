@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { McpClient, readConnection, resolveCodexConnection, resolveConnection } from './lib/mcp.mjs';
-import { addSecret, digest, ensureEmpty, readJson, redact, safeName, unique } from './lib/common.mjs';
-import { dependentCalls, executeStage, isL3Unlabelled, mainCalls, observedSites, persistStage, probes, selectedFocus } from './lib/plan.mjs';
+import { addSecret, digest, ensureEmpty, readJson, redact, safeName, unique, writeArtifact, json } from './lib/common.mjs';
+import { dependentCalls, executeStage, isL3Unlabelled, mainCalls, persistStage, probes, selectedFocus } from './lib/plan.mjs';
+import { fileURLToPath } from 'node:url';
+import { assertReportBinding, assertResumeEvidence, assertResumeMaterials, DEFAULT_CONFIG, readConfigSource, readReportConfig, RESOLVED_CONFIG, resolveReportConfig, scopeMarker, validateG1 } from './lib/report-scope.mjs';
+import { captureInputs } from './lib/input-view.mjs';
 import { buildTables } from './lib/tables.mjs';
-import { assemble, buildManifest, dataNote, writeArtifacts } from './lib/artifacts.mjs';
+import { assemble, buildManifest, dataNote, readViewTable, writeArtifacts } from './lib/artifacts.mjs';
 import { check } from './lib/check.mjs';
 import { verifyNativeBinding } from './lib/codex-binding.mjs';
 import { boundOutput, verifyPortableBinding } from './lib/portable-binding.mjs';
@@ -18,8 +21,7 @@ import { sourceContract } from './lib/source-contract.mjs';
 for (const token of mcpTokens(process.env)) addSecret(token);
 
 const entry = decodeURIComponent(new URL(import.meta.url).pathname);
-const scriptDir = dirname(entry);
-const defaultConfig = join(dirname(scriptDir), 'config', 'vijim-default.json');
+const defaultConfig = fileURLToPath(DEFAULT_CONFIG);
 const help = `用法：
   node report.mjs prepare --current-start YYYY-MM --current-end YYYY-MM --label LABEL [--config PATH] [--out DIR] [--runs-dir DIR] [--release-id ID] [--sections 2,3] [--concurrency 1..4] [--force | --resume] [--connection FILE | --codex | --portable-binding FILE]
   （Codex 原生流程传 --codex --codex-binding <helper verify 返回的收据> 与 --runs-dir 或 --out；无绑定不联网）
@@ -71,9 +73,6 @@ async function prepare(args) {
   const count = args.concurrency === undefined ? 2 : Number(args.concurrency);
   if (!Number.isInteger(count) || count < 1 || count > 4) throw new Error('--concurrency 须为 1..4');
   const sections = args.sections === undefined ? null : args.sections.split(',').map(Number);
-  const config = await readJson(resolve(args.config ?? defaultConfig));
-  if (!Array.isArray(config.sites) || !Array.isArray(config.focus) || !Array.isArray(config.company_brands)) throw new Error('配置缺少 sites/focus/company_brands');
-  const focuses = selectedFocus(config, sections);
   const customDir = args.out ? resolve(args.out) : null;
   const runsDir = resolve(args['runs-dir'] ?? join(homedir(), '.claude/plugins/data/strategic-analytics-strategic/runs'));
   const dirFor = (release) => customDir ?? join(runsDir, `${safeName(label)}-${safeName(release).slice(0, 15)}`);
@@ -87,7 +86,12 @@ async function prepare(args) {
   const portable = args['portable-binding'] ? await verifyPortableBinding(resolve(args['portable-binding'])) : null;
   const mode = portable ? 'portable' : native ? 'codex' : 'unbound';
   if (saved) assertResumeBinding(saved, { mode, identity: (portable ?? native)?.identity });
-  const identity = { current_start: start, current_end: end, label, config: resolve(args.config ?? defaultConfig), config_digest: digest(config), sections: sections ?? 'all', ...(native ? { codex: true, codex_binding: native.identity } : {}), ...(portable ? { portable_binding: portable.identity } : {}) };
+  const configPath = resolve(args.config ?? saved?.args.config ?? defaultConfig);
+  const restored = saved ? await readReportConfig(customDir, saved) : null;
+  const source = restored?.source ?? await readConfigSource(configPath);
+  if (!(Array.isArray(source.sites) || source.sites === 'bound_release') || !Array.isArray(source.focus) || !Array.isArray(source.company_brands)) throw new Error('配置缺少 sites/focus/company_brands');
+  selectedFocus({ ...source, sites: Array.isArray(source.sites) ? source.sites : [] }, sections);
+  const identity = { current_start: start, current_end: end, label, config: configPath, config_digest: digest(source), sections: sections ?? 'all', ...(native ? { codex: true, codex_binding: native.identity } : {}), ...(portable ? { portable_binding: portable.identity } : {}) };
   let previous = null;
   if (args.resume) {
     // 续跑：必须指回同一个运行目录，且取数口径（窗口、标签、配置、章节）逐项一致；release 钉住上次绑定的代次。
@@ -99,6 +103,29 @@ async function prepare(args) {
     }
     if (args['release-id'] && args['release-id'] !== previous.release_id) throw new Error(`--resume 的 release_id 与上次不一致：${previous.release_id}`);
   } else if (customDir) await ensureEmpty(customDir, args.force);
+  if (restored && !restored.snapshot) {
+    // Never manufacture a new data identity or rewrite a historical ledger.
+    // Only an already complete, verifiable prepare can be returned read-only.
+    if (!saved.manifest) throw new Error('旧运行未完成且缺少完整冻结绑定；请用原版脚本续跑或新建运行目录，不迁移旧 digest/账本');
+    const view = await captureInputs(customDir, { report: false });
+    const manifest = saved.manifest;
+    const ledger = view.text('ledger.jsonl').trim().split(/\r?\n/u).filter(Boolean).map(JSON.parse);
+    if (!ledger.length || ledger.some((item) => !item.ok)) throw new Error('旧运行证据未完成；请用原版脚本续跑或新建运行目录');
+    for (const item of ledger) {
+      const record = view.json(`evidence/${item.id}.json`);
+      if (!record.ok || record.envelope?.stamp?.release_id !== previous.release_id || item.release_id !== previous.release_id || digest(record.arguments) !== item.arguments_digest) throw new Error('旧运行证据与原账本不一致');
+    }
+    if (manifest.release_id !== previous.release_id) throw new Error('旧运行 manifest 与原 release 不一致');
+    view.text(manifest.data_note);
+    for (const table of [...manifest.chapters.flatMap((chapter) => chapter.tables), ...(manifest.writing_tables ?? [])]) readViewTable(view, table);
+    for (const slot of manifest.chapters.flatMap((chapter) => chapter.slots)) view.json(slot.digest);
+    await view.assertUnchanged();
+    return { ok: true, legacy_read_only: true, run_dir: customDir, ...(native ? { output_env: native.outputEnv, codex_binding: native.identity.receipt } : {}), ...(portable ? { output_env: portable.outputEnv, portable_binding: portable.identity.receipt } : {}), release_id: previous.release_id, label, windows: manifest.windows, writer_groups: manifest.writer_groups.map((group) => ({ ...group, slots: group.slots.map((slot) => ({ slot: slot.slot, digest: join(customDir, slot.digest), draft: join(customDir, slot.draft) })) })), calls: 0, errors: [] };
+  }
+  if (restored?.snapshot) {
+    await assertResumeMaterials(customDir, restored.snapshot, saved.manifest);
+    await assertResumeEvidence(customDir, restored.snapshot);
+  }
   const pinnedRelease = args['release-id'] ?? previous?.release_id;
   const connection = portable ? portable.connection : args.codex ? await resolveCodexConnection(entry, native.receipt) : await resolveConnection(entry, args.connection ? resolve(args.connection) : null);
   const token = connection.token;
@@ -133,15 +160,23 @@ async function prepare(args) {
   }
   const watermark = status.envelope.data?.available_months?.end;
   if (!watermark || end > watermark) throw new Error(`当期窗口 ${end} 越过完整月水位 ${watermark ?? '未知'}`);
+  const window = { current_start: start, current_end: end };
+  const resolved = resolveReportConfig(source, status.envelope, window);
+  if (restored?.snapshot) {
+    assertReportBinding(status.envelope, restored.snapshot.binding);
+    if (scopeMarker(resolved).sha256 !== scopeMarker(restored.snapshot).sha256) throw new Error('--resume 的冻结配置、站点起点或比较资格已变化');
+  }
+  const config = resolved.config, focuses = selectedFocus(config, sections);
   const runDir = dirFor(releaseId);
   if (!customDir) await ensureEmpty(runDir, args.force);
-  context.runDir = runDir; context.releaseId = releaseId;
+  context.runDir = runDir; context.releaseId = releaseId; context.scopeSnapshot = resolved;
+  if (!args.resume) await writeArtifact(runDir, RESOLVED_CONFIG, json(resolved));
+  identity.scope_binding = scopeMarker(resolved);
   console.error(`RUN_DIR=${runDir}`);
   // 续跑时账本按计划顺序整本重建；首跑记下取数口径供续跑核对
   const runArgs = await startRunArgs(runDir, { ...identity, release_id: releaseId, binding_mode: mode, ...(mode !== 'unbound' ? { manifest_written: Boolean(saved?.manifest) } : {}) }, saved);
   if (args.resume) await writeFile(join(runDir, 'ledger.jsonl'), '');
   await persistStage(statusCalls, results, runDir, token);
-  const window = { current_start: start, current_end: end };
   // New scope excludes unclassified category rows. It cannot justify widening
   // an unobserved L3 slice to its parent; only the historical contract can.
   if (sourceContract(status.envelope.stamp) === 'legacy_derived') await executeStage(client, probes(config, window), context);
@@ -150,23 +185,22 @@ async function prepare(args) {
   await executeStage(client, main.slice(0, 1), context);
   const g1 = results.get('G1');
   if (!g1.ok) throw new Error(`G1 失败，无法核验站点全集：${g1.error.message}`);
-  const observed = observedSites(g1.envelope).sort();
-  const expected = [...config.sites].sort();
-  if (JSON.stringify(observed) !== JSON.stringify(expected)) throw new Error(`G1 当期有观察站点与配置不符：观察到 ${observed.join(',') || '无'}；配置 ${expected.join(',')}`);
+  validateG1(g1.envelope, config, resolved);
   await executeStage(client, main.slice(1), context);
   const b1 = main.filter((call) => call.key.startsWith('B1:'));
   const dependent = dependentCalls(config, b1, results, window);
   await executeStage(client, dependent.calls, context);
-  const tables = buildTables(config, focuses, results, unlabelled, dependent.selected);
+  const tables = buildTables(config, focuses, results, unlabelled, dependent.selected, resolved);
   const windows = g1.envelope.data?.windows ?? {};
   const manifest = buildManifest(config, focuses, sections, tables, dependent.selected, label, releaseId, windows);
   // Preserve a second declaration in the captured report inputs. Losing the
   // resumable identity must not silently downgrade a bound run to legacy output.
   manifest.binding_mode = mode;
+  manifest.scope_binding = identity.scope_binding;
   if (native) { manifest.codex = true; manifest.codex_binding = native.identity; }
   if (portable) manifest.portable_binding = portable.identity;
   const caveats = unique([...results.values()].sort((left, right) => left.id.localeCompare(right.id)).flatMap((record) => record.envelope ? [...(record.envelope.caveats ?? []), ...(record.envelope.coverage_notes ?? [])] : []));
-  await writeArtifacts(runDir, manifest, tables, results, focuses, dataNote(status.envelope, config, label, windows, caveats));
+  await writeArtifacts(runDir, manifest, tables, results, focuses, dataNote(status.envelope, config, label, windows, caveats), resolved);
   if (mode !== 'unbound') await finishRunArgs(runDir, runArgs);
   const errors = [...results.values()].filter((record) => !record.ok).sort((left, right) => left.id.localeCompare(right.id)).map((record) => ({ id: record.id, tool: record.tool, key: record.key, error: record.error }));
   return { ok: errors.length === 0, run_dir: runDir, ...(native ? { output_env: native.outputEnv, codex_binding: native.identity.receipt } : {}), ...(portable ? { output_env: portable.outputEnv, portable_binding: portable.identity.receipt } : {}), release_id: releaseId, label, windows, writer_groups: manifest.writer_groups.map((group) => ({ ...group, slots: group.slots.map((slot) => ({ slot: slot.slot, digest: join(runDir, slot.digest), draft: join(runDir, slot.draft) })) })), calls: context.nextEvidence, errors };

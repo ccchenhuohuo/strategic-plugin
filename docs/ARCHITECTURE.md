@@ -1,10 +1,10 @@
 # Strategic Analytics 的共同核心
 
-本文描述 0.3.5 的共同组件与契约；部署代码、绑定数据和客户端发行是三个独立状态。生产 MCP 已为 **0.3.5**，Bearer 入口为 `/strategy/mcp`；旧 `/flywheel/mcp` 的应用路由和反代已移除，网关显式返回 HTTP 410，不重定向。八个 OAuth/发现入口继续停用。其余改动仅收敛等价重复实现，不改变分析能力或数据语义。
+本文描述 **0.3.6 本地候选（未部署、未发行）**的共同组件与契约；本地政策激活、真实数据发布、生产代码和客户端发行是独立状态。正式公共包与生产 MCP 仍为 **0.3.5**，本轮不作现场读回、不升级正式宿主；生产执行、公开发行与正式宿主升级等待最终确认。
 
-本轮 108 项公网检查、14 工具合同及 24 查询业务对照通过，范围见 [0.3.5 验收说明](ACCEPTANCE-0.3.5.md)。没有执行新数据构建、生产 SQL 或季报 Workflow；构建侧等价精简经过本地回归，但未切换生产构建运行树。
+候选联动版本为插件/MCP **0.3.6**、pipeline **0.17.0** / table_spec **1.7.0** / scope **3.0.0** / currency_mapping **1.2.0** / band_policy **1.1.0**。mapping **2.1.0** 的 108 路径、7 个一级类目保持；有效一级下已登记的下级「其他」保留原桶并计入全市场与父级分母。用户已确认 MX/BR 四个价格、金额字段分别使用完整 MXN/BRL 单位及推送月完整交付，固定价格边界已批准，本次截止月沿用 **2026-09**。这些确认允许本地默认政策激活，不证明真实七组合数据已经构建或生产生效。
 
-生产数据仍为 pipeline **0.16.1** / table_spec **1.6.0**，来源 `direct_wide`，月份 **2024-01～2026-09**，上游 `current`，维护关闭。既有数据切源、库外金额复算和实际数据验收属于 [0.3.4](ACCEPTANCE-0.3.4.md)，不重新计为本轮通过；[0.3.3](ACCEPTANCE-0.3.3.md) 与 [0.3.2](ACCEPTANCE-0.3.2.md) 同样只记录各自时点事实。构建链接、共享 Dagster 服务、FX/行业调度及访问令牌保持不变。
+访问 URL、原令牌与纯 Bearer 认证不变，入口继续为 `/strategy/mcp`。以下为历史状态而非本轮新验收：0.3.5 已停用旧 `/flywheel/mcp`、不重定向，八个 OAuth/发现入口继续停用；108 项公网检查、14 工具合同及 24 查询对照见 [0.3.5 验收说明](ACCEPTANCE-0.3.5.md)。2026-10-20 的数据记录为 pipeline **0.16.1** / table_spec **1.6.0** / mapping 与 scope **2.0.0**、五组合、`direct_wide`、2024-01～2026-09，其构建和数据验收属于 [0.3.4](ACCEPTANCE-0.3.4.md)。不将历史时效、维护状态或测试成绩冒称本轮现场事实；[0.3.3](ACCEPTANCE-0.3.3.md) 与 [0.3.2](ACCEPTANCE-0.3.2.md) 亦只记录各自时点事实。共享 Dagster 布局、FX/行业调度和行业独立链不因扩围改变。
 
 ## 一份 package 的实际关系
 
@@ -36,7 +36,7 @@ flowchart TD
 | 开发仓库 | methodology/、tests/、docs/，根 CLAUDE.md/AGENTS.md | 维护正本、生成投影、开发和验收；根指引不是分析工作区运行指南 |
 | 安装包 | .claude-plugin/、.codex-plugin/、.mcp.json、skills/、codex/、agents/、workflows/、hooks/ | 分发共同 Skill、角色参考、可执行引擎与薄客户端接入 |
 | 远程工具服务 | server/ | 标准只读 HTTP MCP，14 个工具；业务计算、复现戳、代次绑定与响应级警示由服务端承担。自 0.3.4 起仅保留 Bearer 接入（MCP OAuth 开发已停止），0.3.5 迁移至 `/strategy/mcp`；响应预算为 compact catalog 16 KiB、其余工具 64 KiB，超限返回小型明确错误；品牌窗口分页每页 512 行、最多 128 页、120 秒预算 |
-| 远程数据构建 | pipeline/、dagster/ | 数据层语义、断言与发布；不进入客户端季报引擎。v1.6 实现采用权威直供宽表与新版三级类目（97 条路径、7 个一级类目），来源合同按绑定代次解释、构建按显式截止月冻结；具体生效数据与生产验证见本版验收记录 |
+| 远程数据构建 | pipeline/、dagster/ | 数据层语义、断言与发布；不进入客户端季报引擎。v1.7 本地候选沿用权威直供宽表，默认七组合/108 路径/六币种 48 档；来源、分类、历史、币种及 FX 均按绑定代次解释。旧 v1.6.0 pair 保持五组合/97 路径，不回写；构建按显式截止月冻结，本地默认不等于已部署数据 |
 
 安装插件不会把远程服务部署到用户机器，也不授予直接访问 Doris 的能力。客户端脚本只调用受治理 MCP，不重算业务数字。
 
@@ -44,7 +44,13 @@ flowchart TD
 
 宿主主 Agent 读取 `skills/strategic-analytics/SKILL.md`，按用户问题选择标准 MCP 工具，解释响应的展示值、状态与口径。
 通用分析 Skill 是自由问答指导，不是另一个常驻 Agent，也不把所有问答塞进季报骨架。
-分析文本以 `methodology/CORE.md` 为正本，季报规则以 `methodology/REPORT.md` 为正本。0.3.4 已同步新来源合同、参数边界、响应预算和写作纪律；0.3.5 的生成器等价精简不新增分析规则。Skill、角色、工作区指引及 `server/src/instructions.generated.ts` 由同一构建生成，不另维护一份手写规则。
+分析文本以 `methodology/CORE.md` 为正本，季报规则以 `methodology/REPORT.md` 为正本。通用纪律按实际绑定代次解释范围与历史覆盖，不因包版本自动扩围；Skill、角色、工作区指引及 `server/src/instructions.generated.ts` 由同一构建生成，不另维护一份手写规则。本次元信息激活不为换版本机械改写正本。
+
+### 分站点历史与比较
+
+六国七组合是本地 v1.7 默认政策，不是所有历史 pair 的固定范围：原 Amazon US/USD、DE/EUR、JP/JPY、Taobao cn/CNY、Tmall cn/CNY 五组合从 2024-01 起；新增 Amazon MX/MXN、BR/BRL 从 2025-10 起。读侧从同一次因果判定返回的 release/build 读取该代站点合同、valid_from、版本/hash、FX 与固定价格政策；旧 pair 仍为五组合，请求其未纳入站点须拒绝。
+
+当期早于任一请求站点起点时拒绝，不裁窗、不删站点。新七组合的全球 2026Q3 当期和对 2026Q2 的环比有源历史覆盖；对 2025Q3 的全球同比缺 MX/BR 基期，受影响的同比、份额变化、贡献与分解为 null，并披露具体缺口。原站点自身比较期完整时可保留合法同比，但不能替代七组合全市场基数；历史不足不当作零、entered 或业务增长。跨站点金额继续仅用 CNY，同代 FX 缺失必须失败关闭。
 
 ## 季报控制与写作
 
@@ -55,7 +61,7 @@ flowchart TD
 | --- | --- | --- |
 | 控制契约 | quarterly-report/SKILL.md | 固定阶段、输入/输出路径、有限修订与续跑、异常收尾；宿主按能力调度 |
 | 非确定性角色 | references/writer.md、summary.md、verifier.md | 写章节、后写摘要、对照摘要核查；数字原样引用服务端 *_display，不计算、不生成表格 |
-| 确定性引擎 | scripts/report.mjs、lib/plan.mjs、tables.mjs、artifacts.mjs、check.mjs、source-contract.mjs、writing-observations.mjs | 固定查询计划、证据账本、骨架、摘要、表格、组装、机械门禁；source-contract 按绑定代次判定来源合同，writing-observations 生成写作摘要的 observations 投影与摘要数字白名单。0.3.4 默认重点章为支撑类、灯光类、音视频类三章，全球市场分母仍覆盖全部受治理范围；每份写作摘要预算 32 KiB，超限失败关闭 |
+| 确定性引擎 | scripts/report.mjs、lib/plan.mjs、tables.mjs、artifacts.mjs、check.mjs、source-contract.mjs、report-scope.mjs、writing-observations.mjs | 固定查询计划、证据账本、骨架、摘要、表格、组装、机械门禁；source-contract 按绑定代次判定来源合同，report-scope 从同代冻结合同解析站点，writing-observations 生成 observations 投影与摘要数字白名单。默认重点仍为支撑类、灯光类、音视频类三章，全球分母覆盖全部受治理范围；每份写作摘要预算 32 KiB，超限失败关闭。旧默认配置保留，新 v1.7 配置仍是未部署候选，不代表本轮通过季报 Workflow 验收 |
 | 身份、输入与发布绑定 | lib/run-binding.mjs、output-binding.mjs、input-view.mjs、check-binding.mjs、publish.mjs | 原运行身份、冻结输出、一次材料视图、正文/输入版本、发布计划与副本；变更后旧通过及旧链接不能归给新稿 |
 | 收录与恢复 | lib/collect.mjs | 报告/图表、索引、历史、journal 与 EIO 恢复；保留原运行与用户文件 |
 | 可选输出 | lib/charts.mjs、scripts/charts/、lib/publish.mjs | 锁定 Python 绘图与版面门禁；已登录 lark-cli 的个人空间同步 |
@@ -125,4 +131,4 @@ CodeBuddy 是 setup 的小型接入别名，CLI 结果不能冒充 WorkBuddy GUI
 
 Codex 实际安装、真人模型会话、原生宿主绑定、合成 HTTP 认证、真实服务查询、图表、故障注入和本地收录分别记录。0.3.4 的真实季报通过 unbound 兼容入口验证引擎与角色，不冒称新入口的原生宿主或 Workflow 实机验收；当时三项真实 Codex CLI 用例按名称排除，WorkBuddy 桌面实机及真实钥匙串不在当时通过范围。
 
-0.3.5 候选仅做本地隔离回归；临时配置下的原生安装与发现测试不等于正式宿主已升级，也不等于真实账号、钥匙串或桌面 GUI 通过。图表未生成、同会话自查、未核查组、同步关闭或失败均需披露；本轮不新建或共享真实飞书业务文档。
+本轮 0.3.6 仅推进本地候选激活和离线契约，真实七组合开发、Linux 接线、完整可部署制品及正式宿主升级均须另有实际证据；详细状态见 [0.3.6 候选验收范围](ACCEPTANCE-0.3.6.md)。临时配置下的原生清单安装与发现测试不等于正式宿主已升级，也不等于真实账号、钥匙串或桌面 GUI 通过。固定七个根契约中的合成 prepare/assemble/check/collect 不调用模型或 Workflow，不能冒称完整季报验收；本轮明确排除季报 Workflow、模型季报和额外报告测试，不新建或共享真实飞书业务文档。图表未生成、同会话自查、未核查组、同步关闭或失败仍须如实披露。

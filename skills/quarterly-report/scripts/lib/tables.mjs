@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { asArray, cell, safeName, shown, unique, value } from './common.mjs';
 import { competitionSegments } from './plan.mjs';
+import { assertReportRecord, scopeMarker, sourceCoverageNotes } from './report-scope.mjs';
 import { identityCell, poolAvailability, productRankAvailability, productRankGaps, productCell, productRows, productStatus, summaryCell } from './product.mjs';
 
 const metric = (row, name, window, field) => shown(row, ['values', name, window, field]);
@@ -11,6 +12,7 @@ export function tableJson(table) {
   return { id: table.id, title: table.title, columns: table.columns, rows: table.rows,
     footer: table.footer ?? [], notes: table.notes ?? [], evidence: table.evidence ?? [],
     status: table.status, reason: table.reason ?? null,
+    ...(table.scope_binding ? { scope_binding: table.scope_binding } : {}),
     ...(table.observation_context?.length ? { observation_context: table.observation_context } : {}) };
 }
 
@@ -138,7 +140,11 @@ function greaterAbsolute(left, right) {
   return (a[1] ?? '').padEnd(12, '0') > (b[1] ?? '').padEnd(12, '0');
 }
 
-export function buildTables(config, focuses, results, unlabelled, selected) {
+export function buildTables(config, focuses, results, unlabelled, selected, snapshot) {
+  if (snapshot) {
+    if (JSON.stringify(config) !== JSON.stringify(snapshot.config)) throw new Error('表格配置与 resolved 快照不一致');
+    for (const record of results.values()) if (record.ok) assertReportRecord(record, snapshot);
+  }
   const tables = new Map();
   const get = (key) => results.get(key);
   const data = (key) => get(key)?.envelope?.data;
@@ -151,6 +157,8 @@ export function buildTables(config, focuses, results, unlabelled, selected) {
     const status = failed ? 'failed' : options.status ?? (!rows.length ? 'no_observation' : !hasDisplay ? 'display_unavailable' : 'ok');
     const reason = failed ? `取数失败：${textError(records)}` : options.reason ?? (!rows.length ? '该范围当期无观察或服务端未返回成员' : !hasDisplay && !options.status ? '服务端未提供可用于该表的展示值' : null);
     const table = { id, title, columns, rows: failed ? [[reason, ...columns.slice(1).map(() => '—')]] : rows.map((row) => row.map(cell)), evidence: unique(records.map((record) => record?.id)), status, ...(reason ? { reason } : {}), observation_context, notes: unique([noteNull, ...(options.notes ?? []), ...observationNotes(observation_context)]), ...(options.footer ? { footer: options.footer.map(cell) } : {}) };
+    table.notes = unique([...table.notes, ...records.flatMap((record) => sourceCoverageNotes(record?.envelope, config))]);
+    if (snapshot) table.scope_binding = scopeMarker(snapshot);
     table.allowed_numbers = unique([...allowed(table), ...(options.footerDisplays ?? []), ...observation_context.map((item) => item.months_observed_display)].filter(displayLike).map((text) => text.replaceAll('−', '-').replaceAll(',', '')));
     tables.set(id, table);
     return table;
@@ -214,7 +222,7 @@ export function buildTables(config, focuses, results, unlabelled, selected) {
     const poolRows = config.sites.map((site) => {
       const item = data(`${p}:5:${site}`);
       const unavailable = poolAvailability(item);
-      if (unavailable) return [siteLabel(config, site), unavailable.reason, ...Array(6).fill(null)];
+      if (unavailable) return [siteLabel(config, site), identityCell(item, 'current_identities') ?? unavailable.reason, ...Array(6).fill(null)];
       return [siteLabel(config, site), identityCell(item, 'current_identities'), identityCell(item, 'compare_identities'), summaryCell(item, ['pool', 'continuing', 'amount_share_current_pct']), summaryCell(item, ['pool', 'entered', 'amount_share_current_pct']), summaryCell(item, ['pool', 'exited', 'amount_share_compare_pct']), summaryCell(item, ['like_for_like', 'paasche_index']), summaryCell(item, ['like_for_like', 'unit_value_change_pct', 'p50'])];
     });
     const unavailablePools = config.sites.map((site) => {

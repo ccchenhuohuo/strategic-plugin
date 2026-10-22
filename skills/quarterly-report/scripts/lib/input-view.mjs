@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { inputParents, inputPath, safeName } from './common.mjs';
+import { assertViewScope, RESOLVED_CONFIG } from './report-scope.mjs';
 export { inputParents, inputPath } from './common.mjs';
 
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -70,6 +71,8 @@ export async function captureInputs(runDir, options = {}) {
   const readJson = (path) => JSON.parse(text(path));
   const manifest = readJson('manifest.json');
   await take('ledger.jsonl');
+  await take('run-args.json');
+  await take(RESOLVED_CONFIG);
   if (manifest.data_note !== undefined) await take(manifest.data_note);
   for (const chapter of Array.isArray(manifest.chapters) ? manifest.chapters : []) {
     for (const table of Array.isArray(chapter.tables) ? chapter.tables : []) {
@@ -104,7 +107,7 @@ export async function captureInputs(runDir, options = {}) {
     const entry = files.get(path);
     return entry ? { ...entry, bytes: Buffer.from(entry.bytes) } : null;
   };
-  return Object.freeze({ runDir, text, json: readJson, snapshot,
+  const view = Object.freeze({ runDir, text, json: readJson, snapshot,
     // Fresh objects prevent callers from modifying the recorded version.
     get binding() { return JSON.parse(JSON.stringify(binding)); },
     async assertUnchanged() {
@@ -116,4 +119,11 @@ export async function captureInputs(runDir, options = {}) {
       }
     },
   });
+  if (!assertViewScope(view)) {
+    // Preserve the historical input inventory/digest. Merely reading an old run
+    // must not invalidate its prior check or manufacture a new scope contract.
+    binding.files = binding.files.filter((file) => !['run-args.json', RESOLVED_CONFIG].includes(file.path));
+    binding.sha256 = sha(JSON.stringify(binding.files));
+  }
+  return view;
 }

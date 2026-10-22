@@ -41,7 +41,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/quarterly-report/scripts/report.mjs" collect 
 - 锁清理失败时 collect 返回 ok=false、collection_completed 和 lock_cleanup（锁位置、错误与人工恢复说明）；如实分别回报收录完成状态与清理失败，不宣称完全成功，不自行删锁。
 - `prepare` 在慢网络下可能超过单次命令时限：进度写在 stderr，其中一行是 `RUN_DIR=<目录>`。命令因超时或中断结束、
   没有打印最后一行 JSON 时，用**完全相同的参数**再加 `--resume --out <RUN_DIR 目录>` 重跑（已成功的调用会直接复用），
-  直到打印出 JSON；最多续跑 5 次。
+  直到打印出 JSON；最多续跑 5 次。新运行必须保留 resolved 配置与完整绑定；旧未标记完成运行只读核验返回，旧未完成或缺产物时停止并回报原版脚本/新建目录要求，不自动迁移旧 digest/账本。
 - 旧未绑定 Workflow 的 `prepare`（含续跑）带 `--connection "${CLAUDE_PLUGIN_DATA}/connection.env"` 与 `--runs-dir "${CLAUDE_PLUGIN_DATA}/runs"`，保留文件缺失时环境回退的兼容行为。共同绑定入口则必须保留调用方的 --portable-binding 与实际 runs_dir，不追加 --connection，不回退默认连接。
 - 每次只执行一条 `node` 命令，原样执行：不追加重定向、管道、`echo` 或用 `;`/`&&` 拼接其他命令（无头运行的放行规则只匹配
   单条 `node` 命令，复合命令会被拦下）。退出码与输出直接从命令结果里读。
